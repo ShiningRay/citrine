@@ -133,3 +133,37 @@ class TodoApp < Citrine::Component
     self.items = items.reject.with_index { |_t, i| i == idx }
   end
 end
+
+# G-2 演示：响应式属性——props 的值传 Proc 时，在该节点**自己的 Effect** 内求值。
+# 订阅因此收敛到这一格：改选中项只重设两格的 class/style，不重建任何节点。
+# 对照写法 `css_class: i == selected ? "on" : ""` 会让**外层块**订阅 selected，
+# 每次点击整块重建（写起来看不出差别，只能在性能上体现）。
+class SelectionGrid < Citrine::Component
+  CELLS = (0...5).freeze
+  state :selected, default: 0
+
+  def view
+    box(direction: :column, gap: 8, style: { font_family: "sans-serif", width: "360px" }) do
+      label(style: { font_size: "16px", font_weight: "600" }) { "选中：格 #{selected}" }
+      box(direction: :row, gap: 6) do
+        CELLS.each do |i|
+          box(
+            css_class: -> { i == selected ? "cell on" : "cell" },
+            style: -> do
+              {
+                background: i == selected ? "#fde68a" : "#f1f5f9",
+                border_radius: 6,
+                # 选中态的描边只属于当前格：换选后旧格必须丢掉这个键（否则描边残留）
+                box_shadow: i == selected ? "0 0 0 2px #f59e0b" : nil
+              }
+            end,
+            on_click: -> { self.selected = i }
+          ) { label(style: { font_size: "13px" }) { "格 #{i}" } }
+        end
+      end
+      label(style: { color: "#64748b", font_size: "12px" }) do
+        "点格子：只有两格的属性被重设，DOM 节点零重建"
+      end
+    end
+  end
+end
