@@ -40,10 +40,47 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-      - name: 五套桩验收
+      - name: 七套桩验收
         run: bundle exec rake stubs
       - name: 数值工具跨平台一致性（G-11）
         run: bundle exec rake parity
+
+  quality:
+    name: 体积 / source map / lint（T-A1 + T-A4）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: 产物体积守卫（gzip ≤ 300KB）
+        run: bundle exec rake size
+      - name: source map 指回 .rb
+        run: bundle exec rake map_check
+      - name: 生产产物无埋点字符串（T-B3）
+        run: bundle exec rake prod_check
+      - name: 框架专属 lint（Citrine/NoRawIvarAssignment）
+        run: bundle exec rake lint
+
+  browser:
+    name: 真实浏览器布局守卫（T-A2 + T-B2）
+    runs-on: ubuntu-latest
+    env:
+      CHROME_BIN: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - name: headless Chrome 布局守卫（容器尺寸 / 同层兄弟 top）
+        run: bundle exec rake browser
+      - name: DOM/Canvas 等价断言（文本序列 / 尺寸 / top 递增 / 输入覆盖层）
+        run: bundle exec rake canvas_parity
 
   package:
     name: macOS 打包冒烟
@@ -56,3 +93,7 @@ jobs:
           bundler-cache: true
       - name: 打包 CitrineCounter.app
         run: bundle exec bin/citrine package counter
+      - name: ad-hoc 签名 + codesign 验收（T-B4 部分；spctl 正式分发需 Developer ID 证书）
+        run: |
+          codesign --force --deep --sign - build/CitrineCounter.app
+          codesign --verify --deep --strict build/CitrineCounter.app

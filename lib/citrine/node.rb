@@ -9,6 +9,10 @@ module Citrine
     attr_accessor :dom, :text
     # 上一次应用过的内联样式键：响应式 style 变化时用来清掉已消失的键
     attr_accessor :applied_style_keys
+    # 上一次应用过的透传属性键（S2-2）：值翻 false/nil 时用来清掉旧属性
+    attr_accessor :applied_attrs
+    # autofocus（S2-6）：挂载聚焦前记录的活动元素，卸载时恢复焦点到它
+    attr_accessor :focus_restore_target
     # keyed 复用的身份：显式 key + 身份标签（元素类型）+ 组件根身份（若它是某子组件的根）
     attr_accessor :reuse_key, :identity, :component_identity, :component_props
     # 组件边界节点：由 `render(Child)` 产生，承载子组件 view 的输出。
@@ -16,7 +20,8 @@ module Citrine
     attr_accessor :rendered_component
     # 该节点的两个 Effect（响应式属性 / 内容 block）：复用时用来就地重跑
     attr_accessor :props_effect, :block_effect
-    # 已绑定的事件监听（DOM 渲染器用；复用时先解绑再按新 props 重绑）
+    # 已按需绑定的事件监听标签（DOM 渲染器用）：事件发生时从 props 现取处理器，
+    # 因此复用时只补挂新出现的处理器，不做"解绑再重绑"
     attr_accessor :bound_listeners
 
     def initialize(type, props = {}, block = nil, owner: nil)

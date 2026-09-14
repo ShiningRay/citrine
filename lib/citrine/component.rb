@@ -24,8 +24,22 @@ module Citrine
   #     end
   #   end
   class Component
+    # 常用 HTML 元素词表（S2-1）：方法名即元素类型；属性经属性透传（S2-2）
+    # 直达 DOM / SSR（a(href:) / img(src:, alt:) / form(action:) …）。
+    # 方法名与标签名一致，渲染层既有 TAGS[type] || type.to_s 兜底直接生效。
+    ELEMENT_TAGS = %i[
+      a span img ul ol li table thead tbody tr th td
+      form select option textarea video audio
+    ].freeze
+
     # 元素 DSL 方法名：prop 不能与它们重名（否则读 prop 会覆盖元素方法）
-    DSL_METHODS = %i[box stack row label button text_input check_box render].freeze
+    DSL_METHODS = (%i[box stack row label button text_input check_box
+                      render children element portal suspense] + ELEMENT_TAGS).freeze
+
+    # window_key 的作用域包装（S2-3）：scope: :focused 表示"焦点在本组件
+    # 子树内才响应"。用 Struct 而不是 Hash/Array 包裹，避免与 handle_key
+    # 的 Hash 键表形式冲突。
+    WindowKey = Struct.new(:handler, :scope)
 
     class << self
       def prop_defs
@@ -49,7 +63,7 @@ module Citrine
         end
 
         prop_defs[name] = { type: type, default: default }
-        define_method(name) { @props[name] }
+        define_method(name) { read_prop(name) }
       end
 
       # 可变状态：读写受追踪，写入触发订阅该状态的 block 重跑
@@ -161,14 +175,80 @@ module Citrine
         @watch_defs ||= superclass.respond_to?(:watch_defs) ? superclass.watch_defs.dup : []
       end
 
-      # 声明一个 window 级键盘处理器（Symbol 或 Proc）；卸载时自动解绑
+      # 声明式副作用（S1-8）：与 watch 同构的类宏，可在组件内多处声明；
+      # 块返回 Proc 即 cleanup——每次重跑前与组件卸载时各执行一次，
+      # Effect 内申请的资源（定时器 / 原生监听 / 订阅）有了"随重跑清理"的位置。
+      #
+      #   class Ticker < Citrine::Component
+      #     effect {
+      #       timer = set_interval(1000) { self.tick += 1 }
+      #       -> { clear_interval(timer) }
+      #     }
+      #   end
+      def effect(*handlers, &block)
+        effect_defs.concat(collect_hooks(:effect, handlers, block))
+      end
+
+      # 声明过的 effect 体（子类继承父类的，按声明顺序）
+      def effect_defs
+        @effect_defs ||= superclass.respond_to?(:effect_defs) ? superclass.effect_defs.dup : []
+      end
+
+      # ── Context 依赖注入（S1-3）────────────────────────────
+      # 声明本组件向后代提供名为 name 的 context（可给默认值），并定义读写器：
+      #   context :theme, default: { mode: "light" }
+      #   def view
+      #     self.theme = { mode: "dark" }   # 提供值（深相等不变时不通知）
+      #     ...                             # 后代经 use_context(:theme) 读取
+      #   end
+      def context(name, default: nil)
+        if DSL_METHODS.include?(name)
+          raise ArgumentError, "context :#{name} 与 DSL 方法同名，请改名"
+        end
+
+        context_defs[name] = default
+        define_method("#{name}=") { |value| context_signal(name).set(value) }
+        define_method(name) { context_signal(name).get }
+      end
+
+      def context_defs
+        @context_defs ||= superclass.respond_to?(:context_defs) ? superclass.context_defs.dup : {}
+      end
+
+      # ── 错误边界（S1-6）────────────────────────────────────
+      # 声明本组件的渲染兜底：块 / 子组件 view 在本组件的块里抛错时，
+      # 以异常对象为实参调用兜底，其输出替换该块本轮的内容；
+      # 失败那一轮不留半更新，未声明兜底的组件异常照常穿出。
+      #
+      #   class Panel < Citrine::Component
+      #     error_fallback :render_error
+      #     def render_error(err) = label(css_class: "error") { err.message }
+      #   end
+      def error_fallback(handler = nil, &block)
+        handler = block if handler.nil?
+        raise ArgumentError, "error_fallback 需要方法名或块" unless handler.is_a?(Symbol) || handler.is_a?(Proc)
+
+        @error_fallback = handler
+      end
+
+      def error_fallback_def
+        return @error_fallback if defined?(@error_fallback) && @error_fallback
+
+        superclass.respond_to?(:error_fallback_def) ? superclass.error_fallback_def : nil
+      end
+
+      # 声明一个 window 级键盘处理器（Symbol 或 Proc）；卸载时自动解绑。
+      # scope: :focused（S2-3）＝焦点落在组件渲染的子树内才分发——同页多个
+      # 组件都声明 window_key 时不再一起响应。
       #
       #   class Editor < Citrine::Component
       #     window_key :global_key
       #     def global_key(ev) = move(1) if ev.key == "ArrowDown"
       #   end
-      def window_key(handler)
-        window_key_handlers << handler
+      #
+      # 带作用域时登记成 WindowKey 包装（避免与 handle_key 的 Hash 键表形式冲突）
+      def window_key(handler, scope: nil)
+        window_key_handlers << (scope ? WindowKey.new(handler, scope) : handler)
       end
 
       private
@@ -191,6 +271,11 @@ module Citrine
 
     # 组件挂载的根节点与所属渲染器（挂载时由渲染器写入；卸载时用）
     attr_accessor :root, :renderer
+
+    # 子组件 view 的 Effect（S1-2）：渲染器在子组件首次挂载时创建——view 体读到的
+    # prop/state 订阅落在这里，之后 prop 重传或自身 state 变化只重跑这个 Effect
+    # 原地调和，不再借道父块。随组件卸载一起释放。
+    attr_accessor :view_effect
 
     # ref: :name 的元素句柄（DOM 下是元素本身）；挂载时登记，卸载时清空
     def refs
@@ -217,6 +302,37 @@ module Citrine
       @signals ||= {}
     end
 
+    # ── Context 依赖注入（S1-3）────────────────────────────────
+    # provider 侧：context 信号按 name 懒创建（初值来自 context 声明的默认值）
+    def context_signal(name)
+      raise ArgumentError, "未声明的 context: #{name}" unless self.class.context_defs.key?(name)
+
+      (@context_signals ||= {})[name] ||= Signal.new(self.class.context_defs[name])
+    end
+
+    def provides_context?(name)
+      self.class.context_defs.key?(name)
+    end
+
+    # consumer 侧：use_context(:name)。首次读取在渲染遍历栈上向上解析**最近的**
+    # 提供者组件（跳过读者自己），绑定到它的 context 信号——之后的重跑（哪怕
+    # 发生在 provider 不在渲染的时机）都走缓存绑定，信号变化只重跑读它的块。
+    # 祖先链上找不到提供者时显式报错，不静默 nil。
+    def use_context(name)
+      (@context_bindings ||= {})[name] ||= resolve_context(name)
+      @context_bindings[name].get
+    end
+
+    def resolve_context(name)
+      provider = Citrine.renderer&.find_context_provider(name, self)
+      unless provider
+        raise ArgumentError,
+              "use_context(:#{name})：祖先链上没有组件提供该 context（先在祖先里 context :#{name}）"
+      end
+
+      provider.context_signal(name)
+    end
+
     # 按 key 取用的信号表（组件内）：同一个 (name, key) 只会建一个信号，
     # 用于"每行 / 每格 / 每个标的都有自己的信号"这类场景，替代到处手写
     # `@xxx[key] ||= Citrine::Signal.new(...)`：
@@ -236,7 +352,8 @@ module Citrine
 
     # 父组件重传 props（嵌套复用时的就地更新，P0-1/S1）：
     # 校验口径与 initialize 完全一致（未声明 prop / 类型不符都当场报错）。
-    # 子组件侧的读法不变（prop :x 仍是只读），S2 会把它们升级成信号以获得细粒度更新。
+    # 子组件侧的读法不变（prop :x 仍是只读）；写入走 prop 信号（S1-2）：
+    # 值变化只通知真正读过该 prop 的块，子组件实例与 state 原地保留。
     def update_props(new_props)
       defs = self.class.prop_defs
       unexpected = new_props.keys - defs.keys
@@ -248,13 +365,35 @@ module Citrine
           raise TypeError, "prop #{name} 应为 #{definition[:type]}，实际为 #{value.class}"
         end
 
-        @props[name] = value
+        signal = (prop_signals[name] ||= Signal.new(@props[name]))
+        @props[name] = value # props 读法保持明值（introspection / 非响应式读取不建订阅）
+        if value.is_a?(Proc) && signal.peek.is_a?(Proc)
+          signal.replace(value) # 回调每次渲染都是新对象：只换引用，不算变更
+        else
+          signal.set(value)
+        end
       end
       self
     end
 
+    # ── S1-2：prop 的响应式通道 ────────────────────────────────
+    # 声明过的 prop 第一次被读取（或被父重传）时升级为信号——此后在 Effect 内
+    # 读取即订阅，父重传新值只有真正读它的块重跑；没读过的 prop 只是明值。
+    def prop_signals
+      @prop_signals ||= {}
+    end
+
+    def read_prop(name)
+      (prop_signals[name] ||= Signal.new(@props[name])).get
+    end
+
     def computations
       @computations ||= {}
+    end
+
+    # computed 的值 Signal 与它的 Effect 一一对应；Effect 必须留引用，卸载时才 dispose 得掉
+    def computation_effects
+      @computation_effects ||= {}
     end
 
     # 取底层 Signal（双向绑定等需要信号对象本身的场景）
@@ -299,6 +438,37 @@ module Citrine
       emit(:check_box, props.merge(checked: checked, on_change: on_change).compact)
     end
 
+    # ── S2-1：常用 HTML 元素词表 + 任意标签逃生舱 ──────────────
+
+    ELEMENT_TAGS.each do |name|
+      define_method(name) { |**props, &block| emit(name, props, &block) }
+    end
+
+    # 逃生舱：词表之外的任意标签名（含自定义元素）——DOM 与 SSR 两侧都落到
+    # TAGS[type] || type.to_s 的既有兜底，无需改框架源码
+    def element(type, **props, &block)
+      emit(type.to_sym, props, &block)
+    end
+
+    # Portal（S1-5）：把块内容挂到渲染器指定的宿主节点（DOM 下默认 body，
+    # 可传 target: 选择器字符串）——弹层/下拉由此逃出父容器的 overflow 与
+    # 层叠上下文，不再堆 z-index。复用、Effect、卸载级联与原地渲染一致。
+    def portal(target: nil, **props, &block)
+      props[:portal_target] = target if target
+      emit(:portal, props, &block)
+    end
+
+    # Suspense（S1-10）：渲染期等待——ready 为假时渲染 loading 占位，
+    # 就绪后原地切换到块内容（组件实例与 state 全程保留，切换不重建）。
+    #   suspense(ready: -> { !user.nil? },
+    #            loading: -> { label { "加载中…" } }) do
+    #     label { "用户：#{user[:name]}" }
+    #   end
+    def suspense(ready:, loading: nil, **props, &block)
+      props = props.merge(suspense_ready: ready, suspense_loading: loading)
+      emit(:suspense, props, &block)
+    end
+
     def view
       raise NotImplementedError, "#{self.class} 必须实现 #view"
     end
@@ -307,31 +477,61 @@ module Citrine
     #   render(WatchRow, code: code, key: code)   # 传类 + props（推荐）
     #   render(row_instance, key: code)           # 传实例（props 由实例自己持有）
     # 需要复用实例/state 时给 key：同一层（同一父节点下）key 相同的子组件会被保留。
+    # 带块调用即插槽（S1-4）：块延迟到子组件 view 里调用 children 的位置才求值，
+    # 块内 self 是父组件（词法作用域），父 state 变化只重跑 children 所在的块。
     def render(component, **props, &block)
-      raise ArgumentError, "render 暂不支持 block（子组件插槽留待 S3）" if block
-
       unless component.is_a?(Class)
-        extra = props.keys - [:key]
+        extra = props.keys - [:key, :ref]
         raise ArgumentError, "render(实例) 不能再传 props（#{extra.join(', ')}）：props 由实例自己持有" unless extra.empty?
       end
 
-      Citrine.renderer.render_component(self, component, props)
+      Citrine.renderer.render_component(self, component, props, &block)
+    end
+
+    # ── 插槽（S1-4）：render(Child) { … } 的内容落位 ───────────
+    # 子组件在 view 里调用 children，把父传入的块渲染到该位置。块没有响应式读取时
+    # 只渲染一次；读了父 state/信号则由自己的块 Effect 驱动原地更新。
+    def children
+      return nil unless children_presence.get # 订阅：块出现/消失时重跑读它的块
+
+      node = Node.new(:fragment, {}, children_block, owner: children_owner)
+      Citrine.renderer.mount(node)
+      node
+    end
+
+    # children 块由渲染器在挂载/复用子组件时写入（父组件实例 + 块）
+    attr_accessor :children_block, :children_owner
+
+    def children_presence
+      @children_presence ||= Signal.new(!children_block.nil?)
+    end
+
+    # 渲染器复用路径调用：块出现/消失才翻转 presence（Proc 身份每次重传都不同，不作变更依据）
+    def set_children_block(block, owner)
+      @children_block = block
+      @children_owner = owner
+      children_presence.set(!block.nil?)
+      self
     end
 
     # ── 内部 ────────────────────────────────────────────────
 
     def handle_event(handler, event = nil)
-      case handler
-      when Symbol
-        # 无参方法保持原语义；带参方法（如 on_key: :on_key_press）拿到事件对象
-        method(handler).arity.zero? ? send(handler) : send(handler, event)
-      when Proc
-        # 事件 Proc 是回调（区别于 REACTIVE_PROPS 的求值 Proc）：保持闭包 self。
-        # 嵌套组件传入的父级回调，其方法接收者由定义处（父）的词法作用域决定，
-        # instance_exec 重绑到 emit 的 owner（子）会让父组件回调里的方法调用全部断裂。
-        handler.arity.zero? ? handler.call : handler.call(event)
-      else
-        raise ArgumentError, "无法处理的事件处理器: #{handler.inspect}"
+      # 一个事件 = 一个合并窗口（S1-1）：handler 里的多次写入只重渲染一轮，
+      # 中间态不进 DOM；分发返回前 flush 完毕（"点完即更新"的观感不变）
+      Scheduler.batch do
+        case handler
+        when Symbol
+          # 无参方法保持原语义；带参方法（如 on_key: :on_key_press）拿到事件对象
+          method(handler).arity.zero? ? send(handler) : send(handler, event)
+        when Proc
+          # 事件 Proc 是回调（区别于 REACTIVE_PROPS 的求值 Proc）：保持闭包 self。
+          # 嵌套组件传入的父级回调，其方法接收者由定义处（父）的词法作用域决定，
+          # instance_exec 重绑到 emit 的 owner（子）会让父组件回调里的方法调用全部断裂。
+          handler.arity.zero? ? handler.call : handler.call(event)
+        else
+          raise ArgumentError, "无法处理的事件处理器: #{handler.inspect}"
+        end
       end
     end
 
@@ -357,9 +557,18 @@ module Citrine
     end
 
     def run_unmount_hooks
+      dispose_view_effect # 先停 view 重渲染：卸载后不该再被 prop/state 打回来
       dispose_watch_effects # 先停订阅，再跑清理钩子（清理时不该再被信号打回来）
+      dispose_effects # effect 宏的 cleanup 在各自 dispose 内、订阅释放前执行（S1-8）
       refs.clear
       self.class.unmount_hooks.each { |hook| run_hook(hook) }
+      dispose_computed_effects # 放在钩子之后：清理时还能读到新鲜值，跑完才释放订阅
+    end
+
+    def dispose_view_effect
+      @view_effect&.dispose
+      @view_effect = nil
+      self
     end
 
     # 声明过的 watch 体各起一个 Effect：挂载后跑一次，之后依赖变化就重跑。
@@ -383,6 +592,40 @@ module Citrine
     # 诊断/测试：当前存活的 watcher 数
     def watch_effect_count = (@watch_effects || []).size
 
+    # effect 宏的运行/释放（S1-8）：与 watch 同一套生命周期，但启用 cleanup——
+    # 块返回 Proc 时，重跑前与卸载时各执行一次
+    def run_effects
+      @effect_instances ||= []
+      return self unless @effect_instances.empty? # 重复调用（复用路径）不重复创建
+
+      self.class.effect_defs.each do |body|
+        @effect_instances << Effect.create(track_cleanup: true) { run_hook(body) }
+      end
+      self
+    end
+
+    def dispose_effects
+      @effect_instances&.each(&:dispose)
+      @effect_instances = nil
+      self
+    end
+
+    # 诊断/测试：当前存活的 effect 数
+    def effect_count = (@effect_instances || []).size
+
+    # computed 的 Effect 与 watch 同理：不释放就是"卸载后还跟着上游重算"的幽灵订阅，
+    # 而且会把整条组件对象图钉在信号的订阅表上（CRuby 侧实测：卸载后改 state 仍重算）。
+    # 清掉缓存使重新挂载时按需重建。
+    def dispose_computed_effects
+      computation_effects.each_value(&:dispose)
+      @computation_effects = nil
+      computations.clear
+      self
+    end
+
+    # 诊断/测试：当前存活的 computed Effect 数
+    def computation_effect_count = (@computation_effects || {}).size
+
     private
 
     def computation(name)
@@ -391,7 +634,7 @@ module Citrine
       end
       unless computations.key?(name)
         out = Signal.new(nil)
-        Effect.create { out.set(instance_eval(&block)) }
+        computation_effects[name] = Effect.create { out.set(instance_eval(&block)) }
         computations[name] = out
       end
       computations[name].get

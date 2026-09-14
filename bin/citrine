@@ -1,6 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+# lib 入 $LOAD_PATH：dev_server/packager 里的裸 require（citrine/theme 等同库文件）
+# 走标准解析，与 rake t.libs / gem 安装后的行为一致
+$LOAD_PATH.unshift File.expand_path("../lib", __dir__)
+
 # Citrine CLI
 #   citrine dev [目录] [-p 端口]      启动开发服务器（热刷新）
 #   citrine package <示例名>          打包为 macOS .app（桌面化）

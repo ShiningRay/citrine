@@ -33,6 +33,21 @@ class CheckedWidget < Citrine::Component
   end
 end
 
+# S3 回归：computed 的 Effect 若不在卸载时释放，组件卸载后仍会被上游信号打回来重算
+class ComputedLeakWidget < Citrine::Component
+  class << self
+    attr_accessor :runs
+  end
+  self.runs = 0
+
+  state :n, default: 2
+  computed(:sq) { self.class.runs += 1; n * n }
+
+  def view
+    box { label { "sq=#{sq}" } }
+  end
+end
+
 # ── 内存渲染器：验证 Renderer 基类的块级更新语义（回归防护）──────────
 # 背景：曾因 mount 丢失 per-node Effect 包装，导致任何状态变化整树重建、
 # 输入框等节点身份丢失。此测试锁定"更新只影响订阅了该信号的 block"。
@@ -403,5 +418,114 @@ class RenderTest < Minitest::Test
     # 预填文字不含特殊字符，用临时组件验证转义
     w = RenderWidget.new(name: 'a"b')
     assert_includes Citrine.render(w), "&lt;a&quot;b&gt;"
+  end
+
+  # ── S3：SSR 的 class / style 属性值必须转义（此前是裸插值，可属性注入）──────
+
+  def test_ssr_escapes_css_class_value
+    w = Class.new(Citrine::Component) do
+      def view
+        box(css_class: 'a" onclick="alert(1)') { label { "x" } }
+      end
+    end.new
+
+    html = Citrine.render(w)
+    assert_includes html, %(class="a&quot; onclick=&quot;alert(1)")
+    refute_includes html, %(class="a" onclick="alert(1)"), "属性值里的引号必须转义，否则会凭空多出一个属性"
+  end
+
+  def test_ssr_escapes_inline_style_value
+    w = Class.new(Citrine::Component) do
+      def view
+        box(style: { font_family: 'x" onload="y' }) { label { "x" } }
+      end
+    end.new
+
+    html = Citrine.render(w)
+    assert_includes html, %(font-family:x&quot; onload=&quot;y)
+    refute_includes html, %(font-family:x" onload="y)
+  end
+
+  # ── S3：computed 的 Effect 随组件一起释放（此前卸载后仍跟着上游重算）────
+
+  def test_unmount_releases_computed_effects
+    ComputedLeakWidget.runs = 0
+    w = ComputedLeakWidget.new
+    MemoryRenderer.new.mount_component(w, FakeDom.new)
+
+    assert_equal 1, ComputedLeakWidget.runs
+    assert_equal 1, w.computation_effect_count
+
+    Citrine.unmount(w)
+
+    assert_equal 0, w.computation_effect_count, "卸载后不该留下存活的 computed Effect"
+    w.n = 9
+    assert_equal 1, ComputedLeakWidget.runs, "卸载后 computed 不该再被上游信号打回来重算"
+  end
+
+  def test_unmount_hook_can_still_read_computed
+    seen = nil
+    w = Class.new(Citrine::Component) do
+      state :n, default: 4
+      computed(:sq) { n * n }
+      on_unmount -> { seen = sq } # 局部变量接住：验证清理钩子里读到的值
+
+      def view = box { label { "sq=#{sq}" } }
+    end.new
+
+    MemoryRenderer.new.mount_component(w, FakeDom.new)
+    w.n = 9
+    Citrine.unmount(w)
+
+    assert_equal 81, seen, "清理钩子里应能读到 computed 的新鲜值"
+    assert_equal 0, w.computation_effect_count, "钩子跑完后 computed 的订阅同样要释放"
+  end
+
+  def test_remount_rebuilds_computed_lazily
+    ComputedLeakWidget.runs = 0
+    w = ComputedLeakWidget.new
+    MemoryRenderer.new.mount_component(w, FakeDom.new)
+    Citrine.unmount(w)
+
+    root = MemoryRenderer.new.mount_component(w, FakeDom.new)
+
+    assert_equal 1, w.computation_effect_count, "重新挂载后 computed 应重新建 Effect"
+    assert_equal "sq=4", root.children.first.children.first.text
+    assert_equal 2, ComputedLeakWidget.runs
+  end
+
+  # ── S3：复用刷新只应用一次属性（此前 refresh_node 直调 + 属性 Effect 各跑一次）──
+
+  def test_reuse_applies_props_once_per_refresh
+    calls = Hash.new(0)
+    renderer = Class.new(MemoryRenderer) do
+      define_method(:apply_props) do |node|
+        calls[node.object_id] += 1
+        super(node)
+      end
+    end.new
+
+    w = Class.new(Citrine::Component) do
+      state :tick, default: 0
+      state :hue, default: "c0"
+
+      def view
+        stack do
+          tick # 读在容器块里：容器块重跑 → 子节点走复用/刷新路径
+          # 响应式属性读的是**另一个**信号：刷新路径与信号广播不会各跑一次属性 Effect
+          box(key: "k", css_class: -> { hue }) { label { "x" } }
+        end
+      end
+    end.new
+
+    root = renderer.mount_component(w, FakeDom.new)
+    box_node = root.children.first.children.first
+    after_mount = calls[box_node.object_id]
+
+    w.tick = 1
+
+    assert_equal "c0", box_node.dom.class_name
+    assert_equal after_mount + 1, calls[box_node.object_id],
+                 "复用刷新只应应用一次属性（属性 Effect 内部已经就是 apply_props）"
   end
 end

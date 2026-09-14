@@ -1,8 +1,8 @@
 // stub_check.js — Node DOM 桩验收 M1 示例（不起浏览器）
 // 用法: node stub_check.js counter | todo | reactive_props | keyed_list
 const which = process.argv[2];
-if (!["counter", "todo", "reactive_props", "keyed_list"].includes(which)) {
-  console.error("用法: node stub_check.js counter|todo|reactive_props|keyed_list");
+if (!["counter", "todo", "reactive_props", "keyed_list", "props_widgets"].includes(which)) {
+  console.error("用法: node stub_check.js counter|todo|reactive_props|keyed_list|props_widgets");
   process.exit(2);
 }
 
@@ -14,6 +14,15 @@ function makeEl(tag) {
     children: [],
     parentElement: null,
     _listeners: {},
+    _attrs: {},
+    setAttribute(name, value) { this._attrs[name] = String(value); },
+    removeAttribute(name) { delete this._attrs[name]; },
+    getAttribute(name) { return Object.prototype.hasOwnProperty.call(this._attrs, name) ? this._attrs[name] : null; },
+    focus() { global.document.activeElement = this; },
+    contains(el) {
+      if (el === this) return true;
+      return this.children.some((c) => c.contains(el));
+    },
 appendChild(c) {
   // 真实 DOM 的 appendChild 是"移动"：已在别处的节点先摘下来，已在同一父下的也移到末尾
   if (c.parentElement && c.parentElement !== this) c.parentElement.removeChild(c);
@@ -22,6 +31,15 @@ appendChild(c) {
   this.children.push(c);
   return c;
 },
+    // S1-2：信号驱动的 view 重跑把节点挪回原渲染位时用到
+    insertBefore(c, ref) {
+      if (!ref) return this.appendChild(c);
+      if (c.parentElement && c.parentElement !== this) c.parentElement.removeChild(c);
+      this.children = this.children.filter((x) => x !== c);
+      this.children.splice(this.children.indexOf(ref), 0, c);
+      c.parentElement = this;
+      return c;
+    },
     removeChild(c) { c.parentElement = null; this.children = this.children.filter((x) => x !== c); },
     addEventListener(ev, fn) { (this._listeners[ev] = this._listeners[ev] || []).push(fn); },
     fire(ev, event) { (this._listeners[ev] || []).forEach((fn) => fn(event || {})); },
@@ -30,7 +48,7 @@ appendChild(c) {
 
 const app = makeEl("div");
 global.window = global;
-global.document = { getElementById: () => app, createElement: (t) => makeEl(t) };
+global.document = { getElementById: () => app, createElement: (t) => makeEl(t), activeElement: null };
 
 // window 级监听（G-9 的 window_key）：Node 的 global 本身没有 addEventListener，补最小实现
 const windowListeners = {};
@@ -74,6 +92,13 @@ if (which === "counter") {
 
   findButton(app, "重置").fire("click");
   assert("重置", value(), "count = 0　×2 = 0");
+
+  // S3：事件监听按需绑定——没有处理器的元素一个监听都不该挂
+  const plainLabel = findAll(app, "p").find((p) => (p.textContent || "").startsWith("count = "));
+  assert("无处理器的 label 不绑监听", Object.keys(plainLabel._listeners || {}).length, 0);
+  assert("按钮只绑 click", Object.keys(findButton(app, "＋1")._listeners).join(","), "click");
+  const allEls = [app, ...findAll(app, "div"), ...findAll(app, "p"), ...findAll(app, "button"), ...findAll(app, "input")];
+  console.log(`ℹ️ counter 全树监听总数：${allEls.reduce((n, el) => n + Object.keys(el._listeners || {}).length, 0)}`);
 } else if (which === "reactive_props") {
   // 响应式属性（G-2）：点格子只重设两格属性，DOM 节点零重建
   const cells = () => findAll(app, "div").filter((d) => (d.className || "").startsWith("cell"));
@@ -196,6 +221,99 @@ if (which === "counter") {
   input.fire("input");
   input.fire("keydown", { key: "Enter" });
   assert("空白输入不添加", summary(), "待办 · 剩余 0 / 1");
+} else if (which === "props_widgets") {
+  // S2-2：属性透传——id / disabled / aria-* / data-* 出现在真实 DOM 上
+  const submitBtn = () => findButton(app, "提交");
+  assert("透传 id", submitBtn().getAttribute("id"), "ok-btn");
+  assert("aria_label → aria-label", submitBtn().getAttribute("aria-label"), "提交");
+  assert("data_role → data-role", submitBtn().getAttribute("data-role"), "primary");
+  assert("disabled: true 输出空值属性", submitBtn().getAttribute("disabled"), "");
+
+  // S2-4：受控 check_box —— change 写回 Signal（先写回再派发）；
+  // disabled: !agreed 是值类 prop，变化走元素重建路径（v1 语义），重新查节点
+  const agree = findAll(app, "input").find((i) => i.getAttribute("id") === "agree");
+  agree.checked = true;
+  agree.fire("change");
+
+  assert("勾选写回 Signal（disabled 消失）", submitBtn().getAttribute("disabled"), null);
+  assert("取消勾选后 disabled 恢复", (agree.checked = false, agree.fire("change"), submitBtn().getAttribute("disabled")), "");
+
+  // S2-4：IME —— 组合过程的 Enter 不触发 on_enter
+  const draftInput = () => findAll(app, "input").find((i) => i.getAttribute("id") === "draft");
+  draftInput().value = "未上屏的候选";
+  draftInput().fire("input");
+  draftInput().fire("keydown", { key: "Enter", isComposing: true });
+  assert("IME 组合期 Enter 不清空草稿", draftInput().value, "未上屏的候选");
+  draftInput().fire("keydown", { key: "Enter" });
+  assert("普通 Enter 触发 on_enter 清空", draftInput().value, "");
+
+  // S2-1：元素词表（可挂事件）+ 逃生舱
+  const list = findAll(app, "ul").find((n) => n.getAttribute("id") === "lang-list");
+  assert("ul 词表渲染", list ? list.children.length : null, 2);
+  const firstItem = list.children[0];
+  draftInput().value = "待清空";
+  draftInput().fire("input");
+  firstItem.fire("click");
+  assert("li 可挂事件（点击清空草稿）", draftInput().value, "");
+  const link = findAll(app, "a").find((n) => n.getAttribute("id") === "home-link");
+  assert("a 的 href 透传", link.getAttribute("href"), "https://example.com");
+  const logo = findAll(app, "img")[0];
+  assert("img 渲染且为空标签", logo ? logo.children.length : null, 0);
+  const custom = findAll(app, "my_widget")[0];
+  assert("element 逃生舱产出任意标签", custom ? custom.getAttribute("id") : null, "custom-one");
+
+  // S2-3：事件面——每类新事件一条断言（处理器把事件名记到 probe-label）
+  const probe = findAll(app, "div").find((n) => n.getAttribute("id") === "probe");
+  const lastText = () => texts(app).find((t) =>
+    ["dblclick", "contextmenu", "mouseenter", "wheel", "submit", "paste",
+      "touchstart", "pointerdown", "stopped", "event-view"].includes(t));
+  probe.fire("dblclick");
+  assert("on_dblclick", lastText(), "dblclick");
+  probe.fire("contextmenu");
+  assert("on_contextmenu", lastText(), "contextmenu");
+  probe.fire("wheel");
+  assert("on_wheel", lastText(), "wheel");
+  probe.fire("submit");
+  assert("on_submit", lastText(), "submit");
+  probe.fire("paste");
+  assert("on_paste", lastText(), "paste");
+  probe.fire("touchstart");
+  assert("on_touch_start", lastText(), "touchstart");
+  probe.fire("pointerdown");
+  assert("on_pointer_down", lastText(), "pointerdown");
+
+  // S2-3：统一事件对象——处理器拿到 Citrine::Event 而非平台原生对象
+  const eventCheck = findAll(app, "span").find((n) => (n.textContent || "") === "事件对象");
+  eventCheck.fire("click");
+  assert("处理器收到统一事件对象", lastText(), "event-view");
+
+  // S2-3：stop_propagation 接通原生事件
+  const stopper = findAll(app, "span").find((n) => (n.textContent || "") === "拦截");
+  const rawClick = { stopPropagation: function () { this.stopped = true; } };
+  stopper.fire("click", rawClick);
+  assert("ev.stop_propagation 接通原生事件", rawClick.stopped === true, true);
+  assert("拦截器自己的处理器照常执行", lastText(), "stopped");
+
+  // S2-3：window_key 焦点作用域——焦点在面板内才响应
+  const panelInput = findAll(app, "input").find((i) => i.getAttribute("id") === "panel-input");
+  const panelKeys = () => texts(app).find((t) => t.startsWith("面板按键"));
+  document.activeElement = panelInput;
+  fireWindow("keydown", { key: "ArrowDown" });
+  assert("焦点在面板内 → 面板 window_key 响应", panelKeys(), "面板按键 1");
+  document.activeElement = null;
+  fireWindow("keydown", { key: "ArrowDown" });
+  assert("焦点不在面板内 → 不响应", panelKeys(), "面板按键 1");
+
+  // S2-6：autofocus —— 挂载后聚焦；卸载后恢复到之前的焦点
+  const draftNow = draftInput();
+  document.activeElement = draftNow;
+  findButton(app, "聚焦区").fire("click");
+  const zone = findAll(app, "div").find((n) => n.getAttribute("id") === "zone");
+  assert("autofocus 挂载后聚焦", document.activeElement === zone, true);
+  assert("tabindex 透传", zone.getAttribute("tabindex"), "0");
+  assert("aria_label 透传", zone.getAttribute("aria-label"), "区域");
+  findButton(app, "移除区").fire("click");
+  assert("卸载后焦点恢复到之前的元素", document.activeElement === draftNow, true);
 }
 
 console.log(failures === 0 ? "\n全部通过 ✅" : `\n${failures} 项失败 ❌`);

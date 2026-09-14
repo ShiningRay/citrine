@@ -41,6 +41,11 @@ module Citrine
 
       puts "[package] 复制资源 …"
       FileUtils.cp(html_path, File.join(res_dir, "index.html"))
+      # S2-5：样式表随包复制（应用声明的 Citrine.css 文件与目录内 *.css）
+      Dir.glob(File.join(@dir, "*.css")).each do |css|
+        FileUtils.cp(css, res_dir)
+        puts "  + #{File.basename(css)}"
+      end
 
       puts "[package] 编译 Swift 壳 …"
       exe = File.join(macos_dir, @app_name)

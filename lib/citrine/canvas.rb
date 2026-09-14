@@ -49,6 +49,11 @@ module Citrine
 
     def attach(_node, _parent); end
 
+    # Canvas 没有"页面宿主"概念：portal 内容按画布根级布局/绘制
+    def resolve_portal_host(_target)
+      @root.dom
+    end
+
     def detach(_node); end
 
     def apply_props(_node); end
@@ -62,10 +67,118 @@ module Citrine
       node.text = text
     end
 
-    def setup_widget(_node); end
+    def setup_widget(node)
+      # T-B2：text_input 换成真实 <input> 覆盖层（中文输入法可用）；
+      # 无 DOM 环境的宿主（Node 桩）回退 window.prompt 路径
+      setup_text_input_overlay(node) if node.type == :text_input && overlay_available?
+    end
+
+    # ── T-B2 spike：隐藏 DOM 测量 + 真实输入覆盖层 ──────────────
+    # 选型结论：隐藏 DOM 测量（0KB、白送字体回退与度量），不引入 Yoga。
+    # 环境探测带缓存：Node 桩等无 body 环境自动走旧路径，行为不回归。
+
+    def dom_measurement?
+      return @dom_measurement unless @dom_measurement.nil?
+
+      @dom_measurement = `typeof document !== 'undefined' && !!document.body`
+    end
+
+    def overlay_available?
+      return @overlay_available unless @overlay_available.nil?
+
+      @overlay_available = `typeof document !== 'undefined' && !!document.body && !!document.createElement`
+    end
+
+    def hidden_measurer
+      @hidden_measurer ||= begin
+        el = Native(`document.createElement("div")`)
+        style = el[:style]
+        style[:position] = "absolute"
+        style[:left] = "-99999px"
+        style[:top] = "0"
+        style[:visibility] = "hidden"
+        style[:whiteSpace] = "nowrap"
+        `document.body.appendChild(#{el.to_n})`
+        el
+      end
+    end
+
+    # 按节点字体量测文本宽度（px）——度量与回退由浏览器负责
+    def dom_text_width(text, node)
+      el = hidden_measurer
+      el[:textContent] = text.to_s
+      el[:style][:font] = font_string(node)
+      el.getBoundingClientRect()[:width]
+    end
+
+    # 真实 <input> 覆盖层：绝对定位到画布上方，value 信号双向绑定
+    def setup_text_input_overlay(node)
+      input = Native(`document.createElement("input")`)
+      input[:type] = "text"
+      value = node.props[:value]
+      input[:value] = value.get.to_s if value.is_a?(Signal)
+      input[:style][:position] = "absolute"
+      input[:style][:boxSizing] = "border-box"
+      input[:style][:border] = "1px solid #999"
+      input[:style][:font] = "15px sans-serif"
+      input[:style][:background] = "#fff"
+      overlay_root.appendChild(input)
+      if value.is_a?(Signal)
+        input.addEventListener("input", ->(_e) { value.set(input[:value]) })
+        node.owned_effects << Effect.create { input[:value] = value.get.to_s }
+      end
+      (@overlays ||= {})[node.object_id] = { node: node, input: input }
+      node
+    end
+
+    # 覆盖层宿主：挂在 body 上的绝对定位层（节点坐标 = 画布视口偏移 + 布局盒）
+    def overlay_root
+      @overlay_root ||= begin
+        wrap = Native(`document.createElement("div")`)
+        wrap[:style][:cssText] = "position:absolute;left:0;top:0;width:0;height:0;overflow:visible"
+        `document.body.appendChild(#{wrap.to_n})`
+        wrap
+      end
+    end
+
+    # 每次 redraw 后按布局盒重新定位覆盖层，并清掉已消失的输入框
+    def sync_overlays
+      return unless @overlays
+
+      canvas_rect = @canvas.getBoundingClientRect()
+      live = {}
+      collect_text_inputs = proc do |node|
+        live[node.object_id] = true if node.type == :text_input
+        node.children.each { |child| collect_text_inputs.call(child) }
+      end
+      collect_text_inputs.call(@root)
+
+      @overlays.each do |id, entry|
+        unless live.key?(id)
+          entry[:input].remove
+          @overlays.delete(id)
+          next
+        end
+
+        box = entry[:node].dom
+        style = entry[:input][:style]
+        style[:left] = "#{canvas_rect[:left] + box[:x]}px"
+        style[:top] = "#{canvas_rect[:top] + box[:y]}px"
+        style[:width] = "#{box[:w]}px"
+        style[:height] = "#{box[:h]}px"
+      end
+    end
 
     # 嵌套挂载期间不重绘，等最外层 settle（@parents 为空）后整体画一次
     def finalize(_node)
+      redraw if @parents.empty?
+    end
+
+    # 子组件 view 的信号重跑（S1-2）发生在父块渲染之外：重跑收尾时补一次整体重绘。
+    # 若重跑本身嵌在别的渲染过程里（@parents 非空），仍由最外层 finalize 统一重绘。
+    def rerun_component_view(child, parent)
+      super
+    ensure
       redraw if @parents.empty?
     end
 
@@ -88,14 +201,27 @@ module Citrine
         handler = node.props[:on_click]
         node.owner.handle_event(handler) if handler
       when :check_box
+        checked = node.props[:checked]
+        checked = checked.get if checked.is_a?(Signal)
         handler = node.props[:on_change]
-        node.owner.handle_event(handler, !node.props[:checked]) if handler
+        return unless handler
+
+        # 受控语义（S2-4）：先写回信号再调处理器，处理器读到的是新勾选态
+        node.props[:checked].set(!checked) if node.props[:checked].is_a?(Signal)
+        node.owner.handle_event(handler, !checked)
       when :text_input
         dispatch_text_input(node)
       end
     end
 
     def dispatch_text_input(node)
+      # T-B2：有覆盖层时聚焦真实 <input>（IME 可用）；否则回退 prompt 演示路径
+      overlay = @overlays && @overlays[node.object_id]
+      if overlay
+        overlay[:input].focus
+        return
+      end
+
       text = prompt_value(prop_value(node, node.props[:placeholder]).to_s)
       return if text.nil?
 
@@ -120,10 +246,12 @@ module Citrine
       @ctx.clearRect(0, 0, @root.dom[:w], @root.dom[:h])
       place(@root, 0, 0)
       paint(@root)
+      sync_overlays
     end
 
     def box?(node)
-      node.type == :root || node.type == :box
+      # fragment / portal（S1-4 / S1-5）：透明容器按容器参与布局，让多根/弹层照常展开
+      node.type == :root || node.type == :box || node.type == :fragment || node.type == :portal
     end
 
     def box_axes(node)
@@ -163,10 +291,56 @@ module Citrine
       when :check_box  then [18, 18]
       else
         text = display_text(node).to_s
-        @ctx.font = font_string(node)
-        [@ctx.measureText(text)[:width] + (node.type == :button ? 24 : 4),
-         font_size(node) * (node.type == :button ? 1.9 : 1.6)]
+        # T-B2 spike（隐藏 DOM 测量）：真机里按同一字体用隐藏元素量测宽度——
+        # 字体回退 / CJK 度量交给浏览器；Node 桩等无 body 环境回退 measureText。
+        width = dom_measurement? ? dom_text_width(text, node) : ctx_text_width(text, node)
+        width += node.type == :button ? 24 : 4
+        height = font_size(node) * (node.type == :button ? 1.9 : 1.6)
+
+        # T-B2：显式 style width 且文本超宽 → 贪心断行，多行堆叠
+        max_w = wrap_max_width(node)
+        if max_w && width > max_w
+          lines = wrapped_lines(text, node, max_w)
+          width = max_w
+          height = lines.size * font_size(node) * 1.5
+        end
+        [width, height]
       end
+    end
+
+    # 断行宽度上限：label 的显式 style width
+    def wrap_max_width(node)
+      w = style_of(node)[:width]
+      w ? px_num(w) : nil
+    end
+
+    # 贪心断行：CJK 逐字、拉丁/数字按词、空白串整体。
+    # 返回各行文本；调用方需已设置 @ctx.font（量测用）。
+    def wrapped_lines(text, node, max_width)
+      @ctx.font = font_string(node)
+      lines = []
+      current = ""
+      wrap_units(text).each do |unit|
+        candidate = current + unit
+        if current.empty? || @ctx.measureText(candidate)[:width] <= max_width
+          current = candidate
+        else
+          lines << current
+          current = unit
+        end
+      end
+      lines << current unless current.empty?
+      lines
+    end
+
+    # 分词：拉丁/数字词整体、空白串整体、其余逐字（CJK 逐字断行）
+    def wrap_units(text)
+      text.to_s.scan(/[A-Za-z0-9]+|\s+|[^A-Za-z0-9\s]/)
+    end
+
+    def ctx_text_width(text, node)
+      @ctx.font = font_string(node)
+      @ctx.measureText(text)[:width]
     end
 
     def place(node, x, y)
@@ -202,6 +376,9 @@ module Citrine
           @ctx.fillRect(node.dom[:x], node.dom[:y], node.dom[:w], node.dom[:h])
         end
         node.children.each { |child| paint(child) }
+      when :fragment, :portal
+        # 透明容器：只递归子根，自身不占绘制
+        node.children.each { |child| paint(child) }
       when :label
         paint_label(node)
       when :button
@@ -215,17 +392,24 @@ module Citrine
 
     def paint_label(node)
       style = style_of(node)
-      text = display_text(node)
       color = style[:color] || "#222"
       @ctx.font = font_string(node)
       @ctx.fillStyle = color
-      @ctx.fillText(text, node.dom[:x] + 2, node.dom[:y] + font_size(node) * 1.15)
-      return unless style[:text_decoration] == "line-through"
+
+      # T-B2：多行文本逐行绘制（换行条件与 leaf_size 一致）
+      max_w = wrap_max_width(node)
+      lines = max_w ? wrapped_lines(display_text(node).to_s, node, max_w) : [display_text(node).to_s]
+      line_h = font_size(node) * 1.5
+      lines.each_with_index do |line, i|
+        @ctx.fillText(line, node.dom[:x] + 2, node.dom[:y] + font_size(node) * 1.15 + i * line_h)
+      end
+
+      return unless lines.size == 1 && style[:text_decoration] == "line-through"
 
       y_mid = node.dom[:y] + font_size(node) * 0.75
       @ctx.strokeStyle = color
       @ctx.moveTo(node.dom[:x] + 2, y_mid)
-      @ctx.lineTo(node.dom[:x] + 2 + @ctx.measureText(text)[:width], y_mid)
+      @ctx.lineTo(node.dom[:x] + 2 + @ctx.measureText(lines.first)[:width], y_mid)
       @ctx.stroke
     end
 
@@ -244,6 +428,9 @@ module Citrine
     end
 
     def paint_text_input(node)
+      # 真实 <input> 覆盖层已就位：不再绘制占位框（避免视觉重复）
+      return if @overlays && @overlays.key?(node.object_id)
+
       box = node.dom
       value = node.props[:value]
       value = value.get if value.is_a?(Signal)
@@ -270,7 +457,9 @@ module Citrine
       @ctx.strokeStyle = "#666"
       @ctx.strokeRect(box[:x], box[:y], box[:w], box[:h])
       @hits << [box, node]
-      return unless node.props[:checked]
+      checked = node.props[:checked]
+      checked = checked.get if checked.is_a?(Signal)
+      return unless checked
 
       @ctx.fillStyle = "#333"
       @ctx.font = "14px sans-serif"
