@@ -523,10 +523,11 @@ module Citrine
     end
 
     # 值类 prop / 透传属性收到 Proc 时提醒一次：它们不会被求值、也不会订阅
+    # （on_* 的 Proc 是回调，不在此列）
     def warn_unreactive_proc(node)
       bad = node.props.select do |key, value|
         value.is_a?(Proc) && !REACTIVE_PROPS.include?(key) &&
-          !passthrough_prop?(key, node)
+          (WIDGET_VALUE_PROPS.key?(key) || passthrough_prop?(key, node))
       end
       return if bad.empty? || !respond_to?(:warn, true)
 

@@ -47,6 +47,7 @@ module Citrine
     end
 
     def detach(node)
+      restore_focus(node) # S2-6：卸载带 autofocus 的节点时恢复上一焦点
       parent_dom = node.dom[:parentElement]
       parent_dom.removeChild(node.dom) if parent_dom
     end
@@ -85,25 +86,40 @@ module Citrine
       ensure_events(node)
     end
 
+    # S2-3：事件面——prop 名 → DOM 事件名。处理器收到平台无关视图
+    # （键盘是 KeyEvent，其余是 Citrine::Event），原生细节走 #raw。
+    def event_defs
+      @event_defs ||= {
+        on_click: :click, on_focus: :focus, on_blur: :blur,
+        on_key: :keydown, on_key_up: :keyup,
+        on_dblclick: :dblclick, on_contextmenu: :contextmenu,
+        on_mouse_enter: :mouseenter, on_mouse_leave: :mouseleave,
+        on_mouse_down: :mousedown, on_mouse_up: :mouseup,
+        on_wheel: :wheel, on_scroll: :scroll,
+        on_submit: :submit, on_paste: :paste,
+        on_touch_start: :touchstart, on_touch_move: :touchmove, on_touch_end: :touchend,
+        on_pointer_down: :pointerdown, on_pointer_move: :pointermove, on_pointer_up: :pointerup
+      }.freeze
+    end
+
     def ensure_events(node)
       owner = node.owner
 
-      ensure_event(node, :click, :on_click, "click") do |event|
-        handler = node.props[:on_click]
-        owner.handle_event(handler, Native(event)) if handler
+      event_defs.each do |prop, event_name|
+        ensure_event(node, event_name, prop, event_name.to_s) do |event|
+          handler = node.props[prop]
+          next unless handler
+
+          view = event_view(event_name, event)
+          # 键盘处理器支持键表形式（on_key: { "Escape" => :x }），走 handle_key
+          if prop == :on_key || prop == :on_key_up
+            owner.handle_key(handler, view)
+          else
+            owner.handle_event(handler, view)
+          end
+        end
       end
-      ensure_event(node, :keydown, :on_key, "keydown") do |event|
-        handler = node.props[:on_key]
-        owner.handle_key(handler, key_event(event)) if handler
-      end
-      ensure_event(node, :focus, :on_focus, "focus") do |event|
-        handler = node.props[:on_focus]
-        owner.handle_event(handler, Native(event)) if handler
-      end
-      ensure_event(node, :blur, :on_blur, "blur") do |event|
-        handler = node.props[:on_blur]
-        owner.handle_event(handler, Native(event)) if handler
-      end
+
       # text_input 的 on_enter / check_box 的 on_change 走同一套按需绑定
       ensure_event(node, :enter, :on_enter, "keydown") do |event|
         ev = Native(event)
@@ -125,6 +141,16 @@ module Citrine
       end
     end
 
+    # 原生事件 → 平台无关视图：键盘给 KeyEvent，其余给 Citrine::Event
+    def event_view(event_name, event)
+      return key_event(event) if event_name == :keydown || event_name == :keyup
+
+      ev = Native(event)
+      Event.new(event_name.to_s, raw: ev,
+                prevent_default: -> { ev.preventDefault },
+                stop_propagation: -> { ev.stopPropagation })
+    end
+
     def ensure_event(node, tag, prop, event_name, &listener)
       bound = (node.bound_listeners ||= {})
       return if bound[tag] || !node.props.key?(prop)
@@ -133,13 +159,35 @@ module Citrine
       node.dom.addEventListener(event_name, listener)
     end
 
-    # 全局键盘（G-9）：window 级 keydown，绑定组件生命周期（卸载时由 unmount_component 解绑）
+    # 全局键盘（G-9）：window 级 keydown，绑定组件生命周期（卸载时由 unmount_component 解绑）。
+    # S2-3：带 scope: :focused 的处理器只在焦点落在组件子树内时才分发。
     def register_window_key(component, handler)
       win = Native(`window`)
-      listener = ->(event) { component.handle_key(handler, key_event(event)) }
+      scoped = handler.is_a?(Component::WindowKey)
+      body = scoped ? handler.handler : handler
+      # 不要在 lambda 里用 return/next 之外的提前返回写法：lambda 的 return
+      # 走 throw 机制，逃逸到原生 addEventListener 后变成未捕获异常
+      listener = ->(event) {
+        unless scoped && !focused_in?(component)
+          component.handle_key(body, key_event(event))
+        end
+      }
       win.addEventListener("keydown", listener)
       @window_keys ||= {}
       (@window_keys[component] ||= []) << listener
+    end
+
+    # 焦点作用域判定：activeElement 落在组件渲染的子树内（不在 → 包括焦点
+    # 在页面上别处或没有焦点元素的情况，都不分发）。
+    # 注意走 Native 派发而不是 backtick 插值——node.dom 是包装对象，插值会泄漏包装器。
+    def focused_in?(component)
+      root = component.respond_to?(:root) ? component.root : nil
+      return false unless root && root.dom
+
+      active = @document[:activeElement]
+      return false if active.nil?
+
+      root.dom.contains(active)
     end
 
     def unregister_window_keys(component)
@@ -164,6 +212,28 @@ module Citrine
       return if node.type == :fragment
 
       node.dom[:textContent] = text.to_s
+    end
+
+    def finalize(node)
+      return if node.type == :root || node.type == :fragment
+
+      setup_autofocus(node) # S2-6：挂载收尾时聚焦（finalize 只在挂载路径跑一次）
+    end
+
+    # S2-6：autofocus 原语——挂载后把焦点移到该元素，并记录挂载前的活动元素；
+    # 卸载时（detach）恢复焦点到它。tabindex / aria_* 经属性透传（S2-2）直达 DOM。
+    # 同样走 Native 派发（node.dom 是包装对象）
+    def setup_autofocus(node)
+      return unless node.props[:autofocus]
+
+      node.focus_restore_target = @document[:activeElement]
+      node.dom.focus
+    end
+
+    def restore_focus(node)
+      return unless node.props[:autofocus] && (target = node.focus_restore_target)
+
+      target.focus
     end
 
     def setup_widget(node)

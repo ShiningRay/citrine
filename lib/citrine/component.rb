@@ -36,6 +36,11 @@ module Citrine
     DSL_METHODS = (%i[box stack row label button text_input check_box
                       render children element] + ELEMENT_TAGS).freeze
 
+    # window_key 的作用域包装（S2-3）：scope: :focused 表示"焦点在本组件
+    # 子树内才响应"。用 Struct 而不是 Hash/Array 包裹，避免与 handle_key
+    # 的 Hash 键表形式冲突。
+    WindowKey = Struct.new(:handler, :scope)
+
     class << self
       def prop_defs
         @prop_defs ||= superclass.respond_to?(:prop_defs) ? superclass.prop_defs.dup : {}
@@ -189,14 +194,18 @@ module Citrine
         @effect_defs ||= superclass.respond_to?(:effect_defs) ? superclass.effect_defs.dup : []
       end
 
-      # 声明一个 window 级键盘处理器（Symbol 或 Proc）；卸载时自动解绑
+      # 声明一个 window 级键盘处理器（Symbol 或 Proc）；卸载时自动解绑。
+      # scope: :focused（S2-3）＝焦点落在组件渲染的子树内才分发——同页多个
+      # 组件都声明 window_key 时不再一起响应。
       #
       #   class Editor < Citrine::Component
       #     window_key :global_key
       #     def global_key(ev) = move(1) if ev.key == "ArrowDown"
       #   end
-      def window_key(handler)
-        window_key_handlers << handler
+      #
+      # 带作用域时登记成 WindowKey 包装（避免与 handle_key 的 Hash 键表形式冲突）
+      def window_key(handler, scope: nil)
+        window_key_handlers << (scope ? WindowKey.new(handler, scope) : handler)
       end
 
       private
