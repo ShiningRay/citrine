@@ -47,9 +47,9 @@ module Citrine
     end
 
     def finalize(node)
-      if node.type == :fragment || node.type == :portal
-        # 透明容器（S1-4 / S1-5）：fragment 与 SSR 侧的 portal 都按子根依次拼接
-        #（SSR 无宿主概念，portal 内容按逻辑位置内联输出）
+      if node.type == :fragment || node.type == :portal || node.type == :suspense
+        # 透明容器（S1-4 / S1-5 / S1-10）：SSR 侧都按子根依次拼接
+        #（SSR 无宿主概念，portal 内容按逻辑位置内联输出；suspense 只输出当前分支）
         node.dom = node.children.map(&:dom).join
         node.dom += escape_html(node.text) if node.text
         return

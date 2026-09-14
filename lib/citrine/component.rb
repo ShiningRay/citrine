@@ -34,7 +34,7 @@ module Citrine
 
     # 元素 DSL 方法名：prop 不能与它们重名（否则读 prop 会覆盖元素方法）
     DSL_METHODS = (%i[box stack row label button text_input check_box
-                      render children element portal] + ELEMENT_TAGS).freeze
+                      render children element portal suspense] + ELEMENT_TAGS).freeze
 
     # window_key 的作用域包装（S2-3）：scope: :focused 表示"焦点在本组件
     # 子树内才响应"。用 Struct 而不是 Hash/Array 包裹，避免与 handle_key
@@ -456,6 +456,17 @@ module Citrine
     def portal(target: nil, **props, &block)
       props[:portal_target] = target if target
       emit(:portal, props, &block)
+    end
+
+    # Suspense（S1-10）：渲染期等待——ready 为假时渲染 loading 占位，
+    # 就绪后原地切换到块内容（组件实例与 state 全程保留，切换不重建）。
+    #   suspense(ready: -> { !user.nil? },
+    #            loading: -> { label { "加载中…" } }) do
+    #     label { "用户：#{user[:name]}" }
+    #   end
+    def suspense(ready:, loading: nil, **props, &block)
+      props = props.merge(suspense_ready: ready, suspense_loading: loading)
+      emit(:suspense, props, &block)
     end
 
     def view

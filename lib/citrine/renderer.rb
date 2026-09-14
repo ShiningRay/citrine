@@ -25,16 +25,17 @@ module Citrine
     # 事件处理器（on_*）不在此列：它们的 Proc 是回调，不是待求值的值。
     REACTIVE_PROPS = %i[css_class placeholder style direction gap].freeze
 
-    # 透明容器类型（S1-4 fragment / S1-5 portal）：无自身 DOM 语义，
+    # 透明容器类型（S1-4 fragment / S1-5 portal / S1-10 suspense）：无自身 DOM 语义，
     # dispose 时不对它们做 detach（子根挂在真实容器上，逐个摘除）
-    TRANSPARENT_TYPES = %i[fragment portal].freeze
+    TRANSPARENT_TYPES = %i[fragment portal suspense].freeze
 
     # S2-2：框架未消费的属性原样透传到 DOM / SSR（id / disabled / aria_* / data_* / title …）。
     # 命名规则：snake_case → kebab-case（aria_label → aria-label）；
     # 布尔规则：true → 空值属性（<button disabled>）、false / nil → 不输出。
     # 消费面（不透传）：布局快捷键、样式、复用/引用标记、事件回调（on_*），
     # 以及值类 prop（见 WIDGET_VALUE_PROPS，节点感知）。
-    ALWAYS_CONSUMED = %i[key ref style css_class direction gap portal_target].freeze
+    ALWAYS_CONSUMED = %i[key ref style css_class direction gap portal_target
+                         suspense_ready suspense_loading].freeze
 
     # 值类 prop 只在对应控件上被框架消费；其他元素（textarea / select / 自定义标签）
     # 照常透传——否则 value 又会被静默吞掉（F11 的老路）
@@ -95,6 +96,7 @@ module Citrine
       node.identity ||= [:element, node.type]
 
       return mount_portal(node, parent) if node.type == :portal
+      return mount_suspense(node, parent) if node.type == :suspense
       return mount_fragment(node, parent) if node.type == :fragment
 
       node.dom = create_dom(node)
@@ -157,6 +159,49 @@ module Citrine
       end
       finalize(node)
       node
+    end
+
+    # Suspense（S1-10）：依赖未就绪时渲染占位，就绪后原地切换到真实内容。
+    # ready Proc 的信号读取订阅在本节点的 Effect 上——就绪状态翻转驱动切换；
+    # 占位/真实内容走通用块调和（旧分支节点被替换，其余组件实例与 state 不动）。
+    # 只做"渲染期等待"，不含数据请求实现。
+    def mount_suspense(node, parent)
+      node.dom = parent.dom
+      parent.children << node
+      if reactive?
+        node.block_effect = Effect.create { run_suspense(node) }
+        node.owned_effects << node.block_effect
+      else
+        run_suspense(node) # SSR / 一次性渲染：只输出当前分支
+      end
+      finalize(node)
+      node
+    end
+
+    def run_suspense(node)
+      owner = node.owner
+      ready = node.props[:suspense_ready]
+      loading = node.props[:suspense_loading]
+      # ready 的读取（Proc 在 owner 上下文求值）订阅本节点的 Effect——
+      # 就绪状态翻转是切换的触发源
+      ready_value = ready.nil? ? true : prop_value(node, ready)
+      is_ready = !ready_value.nil? && ready_value != false
+
+      previous = node.children.dup
+      node.children.clear
+      @parents.push(node)
+      pool = ReusePool.new(previous)
+      @reuse_pools.push(pool)
+
+      if is_ready
+        owner.instance_exec(&node.block) if node.block
+      elsif loading
+        owner.instance_exec(&loading)
+      end
+    ensure
+      @parents.pop
+      @reuse_pools&.pop
+      pool&.unused_nodes&.each { |old| dispose(old) }
     end
 
     # 嵌套组件入口（Component#render 调用）。
