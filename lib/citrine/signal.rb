@@ -79,6 +79,20 @@ module Citrine
       return self if new_value == @value
 
       @value = new_value
+      broadcast
+      self
+    end
+
+    # 强制广播：跳过相等短路（S1-11）。用于"值按引用共享、内容被就地改写"的
+    # 场景——对象还是同一个，相等检查会误判为没变。
+    def set!(new_value)
+      @init = nil
+      @value = new_value
+      broadcast
+      self
+    end
+
+    def broadcast
       if Scheduler.batching?
         # 批量窗口（S1-1）：只入队不广播——去重后 flush 一次跑完
         @subs.dup.each { |effect| Scheduler.schedule(effect) }
@@ -87,6 +101,8 @@ module Citrine
       end
       self
     end
+
+    private :broadcast # 只经 set / set! 触发，不允许外部绕过值更新手动广播
 
     # 惰性初值是否还没求过（诊断用）
     def lazy? = !@init.nil?
