@@ -23,6 +23,9 @@
     `bin/citrine dev examples` → 打开 props_widgets.html → 用中文输入法在输入框输入候选词 →
     确认选词回车不误触发 on_enter、上屏内容与草稿一致（自动化覆盖：isComposing 守卫与
     覆盖层双向绑定已由 props_widgets 桩断言）。
+  - **T-B2 文本换行已落地**（`4bca00e`，2026-09-15）：label/button 显式 style width 约束下
+    贪心断行（CJK 逐字、拉丁/数字按词、空白整体），多行逐行绘制与高度堆叠；
+    删除线仅单行时绘制。新增 canvas_wrap 桩套。
   - **工具链线 T-B3 已落地**（数据层 `2287fb9`：Citrine.debug_dependency_graph 导出 signal→effect 边与重跑计数；
     生产断言 `621c44c`：rake prod_check 断言不 require citrine/debug 的产物不含埋点字符串；
     还原工具 `dcc8e3d`：Citrine::SourceMap 兼容 indexed map，端到端测试验证 Node 抛错栈位置
