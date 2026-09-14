@@ -26,6 +26,11 @@ Gem::Specification.new do |spec|
   spec.metadata["source_code_uri"] = spec.homepage
   spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/GOALS.md"
 
+  # dev server 运行时依赖（T-B1：Rack + Puma + Listen 替代手写 socket 服务）
+  spec.add_dependency "rack", ">= 3.0"
+  spec.add_dependency "puma", ">= 6.0"
+  spec.add_dependency "listen", ">= 3.8"
+
   spec.add_development_dependency "opal", "~> 1.8"
   spec.add_development_dependency "minitest", "~> 5.0"
   spec.add_development_dependency "rake", "~> 13.0"
