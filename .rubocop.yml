@@ -1,0 +1,22 @@
+# RuboCop 配置（T-A4）：把"裸 @ivar 绕过信号追踪"的约定变成 CI 门禁。
+#
+# 默认 cops 全关（DisabledByDefault）——本仓库的 lint 目标是框架专属 cop，
+# 不是引入整套社区风格约定；后续想开 standard 风格再逐步放开。
+require:
+  - ./lib/rubocop/cop/citrine/no_raw_ivar_assignment.rb
+
+AllCops:
+  TargetRubyVersion: 3.1
+  DisabledByDefault: true
+  SuggestExtensions: false
+  Exclude:
+    - "vendor/**/*"
+    - "build/**/*"
+    - "tmp/**/*"
+    - "examples/**/*.js"
+
+Citrine/NoRawIvarAssignment:
+  Exclude:
+    - "lib/citrine/**" # 框架源码本来就要直接写 ivar（宏实现内部状态）
+    - "lib/rubocop/**"
+    - "test/**/*" # 测试用裸 ivar 做刻意的非响应式缓冲/计数器（被测行为本身）

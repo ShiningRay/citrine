@@ -25,6 +25,11 @@ task :stubs do
   end
 end
 
+desc "Lint（T-A4）：框架专属 cop 门禁（组件内裸 @ivar 赋值绕过信号追踪）"
+task :lint do
+  sh "bundle exec rubocop --format simple"
+end
+
 desc "产物体积守卫（T-A1）：无 map 编译 + esbuild 压缩，gzip 后 ≤ 300KB（GOALS P1 目标）"
 task :size do
   Dir.chdir("examples") do
