@@ -18,7 +18,7 @@ jobs:
       - name: 构建 gem
         run: gem build citrine.gemspec
       - name: 附产物到 GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: citrine-*.gem
       - name: 发布到 RubyGems（需配置 RUBYGEMS_API_KEY secret）
