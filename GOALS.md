@@ -466,7 +466,8 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 | 2026-09-14 | **响应式集合（D）**：`Citrine.signal_list([...])` / 混入后的 `signal_list([...])` → `Citrine::ListSignal`（`Signal` 子类）。集合 API `<<` / `push` / `unshift` / `insert` / `pop` / `shift` / `delete` / `delete_at` / `clear` / `replace` / `[]=` / `sort!` … 每次变更内部换一份**新数组**再通知，触发路径仍只有 `Signal#set` 一条；**`get` 返回冻结快照**（`rows.get << x` 当场 `FrozenError`，而不是静默不触发）；读操作（`size` / `each` / `map` / `include?` / `[]` …）在块内读会建立依赖。新增 test/list_signal_test.rb（13 项），并在 Opal/Node 侧实测一致（`frozen=true`、`FrozenError`） | 两个 demo 的集合代码是"维护普通数组 + 在改动末尾补一句 `@x_signal.set(@x.dup)`"——两个真相源，漏一处就静默不更新（v1 只有整体替换一条触发路径逼出来的）。D 让"改集合"本身成为触发点，同时把最阴的坑（就地改数组静默无效）升级为当场报错；深响应（元素内部改动）仍不做，与 v1 边界一致 |
 
 | 2026-09-14 | **响应式集合 D 增补**：`ListSignal` 加 `include Enumerable`（`find` / `select` / `count` / `min` / `max` / `sum` / `sort_by` …，都经 `each` 因而可响应）；`push_bounded` / `unshift_bounded`（有上限列表**一次通知**——`<<` 再 `shift` 会通知两次，等于每档多渲染一遍，这是 dogfooding 实测出来的坑）；`dup` / `clone` 返回集合副本而不是克隆信号对象；`signal_list(Hash)` / `signal_list(42)` 当场报错（Hash 会被 `to_a` 悄悄拆成键值对）；新增 `Signal#peek` 读值但不订阅（"取值"与"订阅"解耦，MobX 的 untracked）。新增 test/list_signal_followup_test.rb（9 项） | 这些缺口是 demo 迁移时逐条撞出来的：`cancel_order` 要写 `@orders.get.find`（Enumerable 缺失）、`@curve` 的三步手工同步要压成一次 `replace`（缺防呆写法）、`@orders.dup` 差点意思（`dup` 落到 `Object#dup`）。补在框架侧比让每个应用各踩一遍便宜 |
-## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
+
+| 2026-09-14 | **声明式订阅 `watch`**：类宏 `watch :method` / `watch { ... }`（可一次声明多个、子类继承）——挂载后跑一次，之后它读到的信号一变就重跑，卸载时框架自动 dispose，免去每个 watcher 手写 `Effect.create` + `on_unmount` 里 dispose 的样板（两个 demo 各有若干处）。实现要点：Effect 由**响应式**渲染器在挂载路径上创建（`reactive?` 为真才建，SSR 不建），dispose 放在 `run_unmount_hooks` 最前面（先停订阅再跑清理钩子）。新增 test/watch_test.rb（7 项，含"SSR 不创建 watcher"与"卸载后不再被信号打回"） | 两个 demo 的 agent 独立报了同一个缺口：手写 Effect + dispose 配对容易漏（漏了就是"卸载后还在跑"的幽灵订阅）。放在框架里一次做对；顺序问题（先 dispose 再跑清理）也是踩过才知道的 |## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
 
 > 定位：从"完整 demo"走向"能用 → 好用 → 是个开源项目"。
 

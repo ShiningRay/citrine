@@ -47,6 +47,7 @@ module Citrine
       warn_undirected_boxes
       register_window_keys(component)
       component.run_mount_hooks if component.respond_to?(:run_mount_hooks)
+      component.run_watch_effects if reactive? && component.respond_to?(:run_watch_effects)
       root
     end
 
@@ -135,6 +136,7 @@ module Citrine
       adopt_root(node, child, identity, key, child_props)
       register_window_keys(child)
       child.run_mount_hooks if child.respond_to?(:run_mount_hooks)
+      child.run_watch_effects if reactive? && child.respond_to?(:run_watch_effects)
       node
     end
 
