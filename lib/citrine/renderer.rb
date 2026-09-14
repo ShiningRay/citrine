@@ -13,7 +13,7 @@ module Citrine
   class Renderer
     TAGS = { box: "div", label: "p", button: "button",
              text_input: "input", check_box: "input" }.freeze
-    VOID = %i[text_input check_box].freeze
+    VOID = %i[text_input check_box img].freeze
 
     # 响应式属性白名单：这些 prop 的值可以是 Proc，在**该节点自己的 Effect** 内求值。
     #
@@ -25,16 +25,19 @@ module Citrine
     # 事件处理器（on_*）不在此列：它们的 Proc 是回调，不是待求值的值。
     REACTIVE_PROPS = %i[css_class placeholder style direction gap].freeze
 
-    # 由渲染器直接当作**值**消费的 prop：收到 Proc 时明确提醒，避免"写了但不生效"。
-    VALUE_PROPS = %i[value checked].freeze
-
     # S2-2：框架未消费的属性原样透传到 DOM / SSR（id / disabled / aria_* / data_* / title …）。
     # 命名规则：snake_case → kebab-case（aria_label → aria-label）；
     # 布尔规则：true → 空值属性（<button disabled>）、false / nil → 不输出。
-    # 消费面（不透传）：布局快捷键、样式、受控值、复用/引用标记、事件回调（on_*）。
-    PASSTHROUGH_EXCLUDED = %i[
-      key ref style css_class placeholder direction gap value checked type
-    ].freeze
+    # 消费面（不透传）：布局快捷键、样式、复用/引用标记、事件回调（on_*），
+    # 以及值类 prop（见 WIDGET_VALUE_PROPS，节点感知）。
+    ALWAYS_CONSUMED = %i[key ref style css_class direction gap].freeze
+
+    # 值类 prop 只在对应控件上被框架消费；其他元素（textarea / select / 自定义标签）
+    # 照常透传——否则 value 又会被静默吞掉（F11 的老路）
+    WIDGET_VALUE_PROPS = {
+      placeholder: [:text_input], type: %i[text_input check_box],
+      value: [:text_input], checked: [:check_box]
+    }.freeze
 
     def initialize
       @parents = []
@@ -56,6 +59,7 @@ module Citrine
       register_window_keys(component)
       component.run_mount_hooks if component.respond_to?(:run_mount_hooks)
       component.run_watch_effects if reactive? && component.respond_to?(:run_watch_effects)
+      component.run_effects if reactive? && component.respond_to?(:run_effects)
       root
     end
 
@@ -177,6 +181,7 @@ module Citrine
       register_window_keys(child)
       child.run_mount_hooks if child.respond_to?(:run_mount_hooks)
       child.run_watch_effects if reactive? && child.respond_to?(:run_watch_effects)
+      child.run_effects if reactive? && child.respond_to?(:run_effects)
       node
     end
 
@@ -490,15 +495,19 @@ module Citrine
 
     # ── S2-2：属性透传 ─────────────────────────────────────
 
-    def passthrough_prop?(name)
-      !PASSTHROUGH_EXCLUDED.include?(name) && !name.to_s.start_with?("on_")
+    def passthrough_prop?(name, node)
+      return false if ALWAYS_CONSUMED.include?(name)
+      return false if name.to_s.start_with?("on_")
+
+      consumed_on = WIDGET_VALUE_PROPS[name]
+      consumed_on ? !consumed_on.include?(node&.type) : true
     end
 
     # 未消费属性 → [[kebab-case 名, 字符串值]]。true → ""（空值属性）；false / nil 不输出。
     # DOM 与 SSR 两侧共用同一口径，保证输出一致。
     def passthrough_props(node)
       node.props.map do |name, value|
-        next unless passthrough_prop?(name)
+        next unless passthrough_prop?(name, node)
         next if value.nil? || value == false
 
         [Style.kebab(name), value == true ? "" : value.to_s]
@@ -517,7 +526,7 @@ module Citrine
     def warn_unreactive_proc(node)
       bad = node.props.select do |key, value|
         value.is_a?(Proc) && !REACTIVE_PROPS.include?(key) &&
-          (VALUE_PROPS.include?(key) || passthrough_prop?(key))
+          !passthrough_prop?(key, node)
       end
       return if bad.empty? || !respond_to?(:warn, true)
 

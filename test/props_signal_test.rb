@@ -78,6 +78,7 @@ end
 # 同层的另一类子组件：不读变化中的 prop，label 块不应被牵连重跑
 class QuietChild < Citrine::Component
   prop :tag_name, type: String, default: "q"
+  prop :on_tick
 
   class << self
     attr_accessor :label_runs
@@ -160,6 +161,42 @@ class PropsSignalTest < Minitest::Test
                  "没读 title 的兄弟块重跑计数必须为 0"
     assert_equal view_runs_after_mount, SignalChild.view_runs,
                  "子组件 view 体不应因 prop 重传而整体重跑"
+  end
+
+  # ── S1-7：memo / 浅比较跳过 ────────────────────────────────
+  # S1-2 的 view Effect 架构下，"props 未变则跳过子组件重渲染"是天然结果：
+  # 父块重跑只在 prop 信号真正变化时触及子组件，且只重跑读它的块（view 体不重跑）。
+
+  def test_parent_rerun_skips_child_when_props_unchanged
+    parent = SignalParent.new
+    mount(parent)
+    view_runs_after_mount = SignalChild.view_runs
+
+    parent.label_text = "a" # 重传同值 → 信号 set 相等短路
+
+    assert_equal view_runs_after_mount, SignalChild.view_runs,
+                 "props 未变：子组件 view 调用计数 0"
+  end
+
+  def test_new_callback_proc_does_not_rerender_child
+    parent = Class.new(Citrine::Component) do
+      components QuietChild
+      state :tick, default: 0
+
+      define_method(:view) do
+        stack do
+          tick # 父块重跑扳机
+          quiet_child(tag_name: "静态", on_tick: -> { self.tick += 1 }, key: :two)
+        end
+      end
+    end.new
+    mount(parent)
+    runs_after_mount = QuietChild.label_runs
+
+    parent.tick = 1 # 重传新的 on_tick Proc（tag_name 值未变）
+
+    assert_equal runs_after_mount, QuietChild.label_runs,
+                 "新回调 Proc 不应被误判为变更（只静默换引用）"
   end
 
   def test_callback_prop_swap_does_not_rerun_blocks

@@ -41,6 +41,18 @@ module Citrine
       StringRenderer.render(component)
     end
 
+    # 批量窗口（S1-1）：块内对信号的多次写入合并为一轮 Effect 重跑，
+    # 中间态不进 DOM。事件处理器的分发过程已自动包裹一次；手动改多个信号
+    # 又不想看到级联重渲染时用：
+    #
+    #   Citrine.batch do
+    #     self.a = 1
+    #     self.b = 2      # a、b 的读者各只重跑一次
+    #   end
+    def batch(&block)
+      Scheduler.batch(&block)
+    end
+
     # 造一个新信号。模块级工厂，哪儿都能用（领域模型 / 测试 / 组件外）：
     #
     #   tick = Citrine.signal(0)

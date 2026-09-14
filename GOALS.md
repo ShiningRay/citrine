@@ -325,6 +325,30 @@ box(
 - 平台边界：DOM 幂等重设属性（事件绑定拆到 `bind_events`，避免重复挂监听）；SSR 只求值一次；
   Canvas 在绘制时求值。响应式 `style` 换掉整份内联样式，消失的键会被显式清空（错误态高亮必须能消失）
 
+### 批量更新（S1-1，2026-09-15 增补）
+
+`Citrine.batch { ... }` 开启合并窗口：窗口内 `Signal#set` 只把受影响的 Effect
+去重入队，窗口关闭时 flush 一次跑完——一个 handler 改多个信号只重渲染一轮，
+中间态不进 DOM。事件分发（`handle_event` / `handle_key`）自动包裹一次，
+"点完即更新"的观感不变；跨事件边界不合并。flush 排空期间产生的新写入走
+同步广播（与窗口外语义一致，也避免循环依赖无限排空）。
+
+### effect 宏与 cleanup（S1-8，2026-09-15 增补）
+
+`effect { ... }` 与 `watch` 同构的类宏（可多处声明、子类继承、SSR 不创建），
+差别是**块返回 Proc 即 cleanup**——每次重跑前与组件卸载时各执行一次：
+
+```ruby
+effect {
+  timer = set_interval(1000) { self.tick += 1 }
+  -> { clear_interval(timer) }   # 重跑前 / 卸载时执行
+}
+```
+
+实现上是 `Effect.create(track_cleanup: true)` 的能力开关：其余 Effect
+（块/属性/watch/computed/view）不把返回值当清理，避免普通返回值被误调用。
+清理先于订阅释放执行（清理时读得到新鲜值，与 computed 释放顺序同口径）。
+
 ### props 响应式传播（S1-2，2026-09-15 增补）
 
 声明的 prop（`prop :title`）第一次被读取或被父重传时升级为 `Signal`：
@@ -501,7 +525,8 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 
 | 2026-09-15 | **props 响应式传播 + 子组件 view Effect（S1-2）**：声明的 prop 第一次被读取/重传时升级为 `Signal`——父重传走 `update_props` → 信号广播，**只有真正读该 prop 的块重跑**，子组件实例与 state 原地保留（组件槽位复用不再比较 props，改按"同类组件落同一槽位"匹配）。配套把子组件 view 从"借道父块执行"改为**自己的 view Effect**（`child.view_effect`，卸载时 dispose）：view 体读到的 prop/state 订阅落在子组件上，信号重跑经 `rerun_component_view` 原地调和（根换类型沿用 S3-2 的边界摘除舞步；根挪回原渲染位靠新钩子 `attach_before`，DOM 侧 insertBefore）。回调类 prop（Proc）重传只静默换引用（`Signal#replace`），不算变更。多根子组件输出按透明 fragment 处理（S1-4）。新增 test/props_signal_test.rb（5 项）+ nesting_test 反转/新增 9 项 | 这是 React 模型的核心："父更新 → 子更新且保留状态"。此前 props 一变即整体重建（state/焦点/Effect 全丢），beryl 只能立法"交互态必须受控"绕开。view Effect 同时消掉了两个隐患：prop 写入会再入正在运行的父块；父块被孙辈状态订阅导致的粗粒度重渲染 |
 | 2026-09-15 | **插槽 children + 组件 ref（S1-4 / S1-9）**：`render(Child) { … }` 的块延迟到子组件 view 里调用 `children` 的位置求值（块内 self 是父组件，读了父信号由自己的块 Effect 原地更新；块的出现/消失经 presence 信号翻转）。组件 `ref: :name` 语义改为"登记子组件实例"（元素 ref 仍是平台句柄），复用/重建两条路径都重新登记 | 容器组件（Tabs/Dialog）此前写不了，只能 `content:` Proc prop 模拟；父调子方法只能绕内部字段（F25） |
-| 2026-09-15 | **属性透传 + 受控 check_box + IME（S2-2 / S2-4）+ 样式单位推断（S2-5 前半）**：框架未消费的属性（id/disabled/aria_*/data_*/title…）原样透传到 DOM 与 SSR——snake_case → kebab-case，`true` → 空值属性，`false`/`nil` 不输出，值转义，响应式值翻 false 时清掉旧属性（`applied_attrs`）；`check_box(checked: Signal)` 真正双向绑定（change 先写回再派发）；`on_enter` 在 IME 组合期（isComposing）不触发；`font_size`/`letter_spacing`/`gap` 等排版键数值补 px（SSR 不再输出非法 CSS）。`text_input` 支持 `type: "password"` 覆写。桩验收增 props_widgets 套（DOM 侧断言） | `disabled`/`aria-*` 静默丢弃让无障碍、E2E 选择器、原生表单语义全部缺位（F11）；`check_box` 受控名不副实；`font-size:14` 是非法 CSS（浏览器整条丢弃，SSR 与 DOM 输出不一致） |## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
+| 2026-09-15 | **属性透传 + 受控 check_box + IME（S2-2 / S2-4）+ 样式单位推断（S2-5 前半）**：框架未消费的属性（id/disabled/aria_*/data_*/title…）原样透传到 DOM 与 SSR——snake_case → kebab-case，`true` → 空值属性，`false`/`nil` 不输出，值转义，响应式值翻 false 时清掉旧属性（`applied_attrs`）；`check_box(checked: Signal)` 真正双向绑定（change 先写回再派发）；`on_enter` 在 IME 组合期（isComposing）不触发；`font_size`/`letter_spacing`/`gap` 等排版键数值补 px（SSR 不再输出非法 CSS）。`text_input` 支持 `type: "password"` 覆写。桩验收增 props_widgets 套（DOM 侧断言） | `disabled`/`aria-*` 静默丢弃让无障碍、E2E 选择器、原生表单语义全部缺位（F11）；`check_box` 受控名不副实；`font-size:14` 是非法 CSS（浏览器整条丢弃，SSR 与 DOM 输出不一致） |
+| 2026-09-15 | **批量更新（S1-1）+ effect 宏（S1-8）+ memo 语义（S1-7）+ 元素词表（S2-1）**：① `Citrine.batch` 合并窗口 + 事件分发自动包裹——窗口内 `Signal#set` 去重入队、flush 一次跑完，一个 handler 改多个信号只重渲染一轮；② `effect` 类宏，块返回 Proc 即 cleanup（重跑前 + 卸载时各一次）；③ "props 未变跳过子组件重渲染"由 S1-2 的 view Effect 架构天然达成（父块重跑只在 prop 信号变化时触及子组件、只重跑读它的块，view 体不重跑），S1-7 不再需要独立实现；④ 元素词表扩充 18 个常用 HTML 标签（a/img/ul/li/table/form/select/textarea/video/audio…）+ `element(:任意标签)` 逃生舱，值类 prop 消费面改为节点感知（textarea 的 value 照常透传）。新增 batching_test 5 项、effect_test 4 项、elements_test 7 项、props_signal_test memo 2 项 | ① 一个 handler 改两个信号 = 两轮渲染、中间态进 DOM（F3/G-3，GOALS P0-4 挂号）；② Effect 内申请的资源（定时器/原生监听）没有"随重跑清理"的位置（P0-2）；④ 组件作者无法直接产出语义化标签与自定义元素（词表只有 5 项，beryl 靠 box/label 模拟） |## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
 
 > 定位：从"完整 demo"走向"能用 → 好用 → 是个开源项目"。
 
@@ -518,10 +543,14 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
      "props 响应式传播"）*
 2. **生命周期宏**：兑现第七节承诺的 `effect` / `watch` / `on_mount` /
    `on_unmount`（当前只实现了 state / computed 两宏）。
+   *（2026-09-15 已兑现：watch 此前落地；`effect` 宏已落地，块返回 Proc 即
+   cleanup，重跑前与卸载时各执行一次——见第七节"effect 宏与 cleanup"）*
 3. **响应式集合**：ReactiveArray / ReactiveHash（`items << x` 直接触发），
    替换 v1 的整体替换语义。
 4. **批量更新**：一个 handler 改多个信号只重渲染一轮（事务/microtask 合并），
    消除级联重跑的中间闪烁。
+   *（2026-09-15 已落地：`Citrine.batch` 显式窗口 + 事件分发自动包裹，
+   窗口内 set 去重入队、返回前 flush 一次跑完——见第七节"批量更新"）*
 
 ### P1 — 成为"好用"的开发体验
 

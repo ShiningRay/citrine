@@ -24,8 +24,17 @@ module Citrine
   #     end
   #   end
   class Component
+    # 常用 HTML 元素词表（S2-1）：方法名即元素类型；属性经属性透传（S2-2）
+    # 直达 DOM / SSR（a(href:) / img(src:, alt:) / form(action:) …）。
+    # 方法名与标签名一致，渲染层既有 TAGS[type] || type.to_s 兜底直接生效。
+    ELEMENT_TAGS = %i[
+      a span img ul ol li table thead tbody tr th td
+      form select option textarea video audio
+    ].freeze
+
     # 元素 DSL 方法名：prop 不能与它们重名（否则读 prop 会覆盖元素方法）
-    DSL_METHODS = %i[box stack row label button text_input check_box render children].freeze
+    DSL_METHODS = (%i[box stack row label button text_input check_box
+                      render children element] + ELEMENT_TAGS).freeze
 
     class << self
       def prop_defs
@@ -159,6 +168,25 @@ module Citrine
       # 声明过的 watcher 体（子类继承父类的，按声明顺序）
       def watch_defs
         @watch_defs ||= superclass.respond_to?(:watch_defs) ? superclass.watch_defs.dup : []
+      end
+
+      # 声明式副作用（S1-8）：与 watch 同构的类宏，可在组件内多处声明；
+      # 块返回 Proc 即 cleanup——每次重跑前与组件卸载时各执行一次，
+      # Effect 内申请的资源（定时器 / 原生监听 / 订阅）有了"随重跑清理"的位置。
+      #
+      #   class Ticker < Citrine::Component
+      #     effect {
+      #       timer = set_interval(1000) { self.tick += 1 }
+      #       -> { clear_interval(timer) }
+      #     }
+      #   end
+      def effect(*handlers, &block)
+        effect_defs.concat(collect_hooks(:effect, handlers, block))
+      end
+
+      # 声明过的 effect 体（子类继承父类的，按声明顺序）
+      def effect_defs
+        @effect_defs ||= superclass.respond_to?(:effect_defs) ? superclass.effect_defs.dup : []
       end
 
       # 声明一个 window 级键盘处理器（Symbol 或 Proc）；卸载时自动解绑
@@ -327,6 +355,18 @@ module Citrine
       emit(:check_box, props.merge(checked: checked, on_change: on_change).compact)
     end
 
+    # ── S2-1：常用 HTML 元素词表 + 任意标签逃生舱 ──────────────
+
+    ELEMENT_TAGS.each do |name|
+      define_method(name) { |**props, &block| emit(name, props, &block) }
+    end
+
+    # 逃生舱：词表之外的任意标签名（含自定义元素）——DOM 与 SSR 两侧都落到
+    # TAGS[type] || type.to_s 的既有兜底，无需改框架源码
+    def element(type, **props, &block)
+      emit(type.to_sym, props, &block)
+    end
+
     def view
       raise NotImplementedError, "#{self.class} 必须实现 #view"
     end
@@ -375,17 +415,21 @@ module Citrine
     # ── 内部 ────────────────────────────────────────────────
 
     def handle_event(handler, event = nil)
-      case handler
-      when Symbol
-        # 无参方法保持原语义；带参方法（如 on_key: :on_key_press）拿到事件对象
-        method(handler).arity.zero? ? send(handler) : send(handler, event)
-      when Proc
-        # 事件 Proc 是回调（区别于 REACTIVE_PROPS 的求值 Proc）：保持闭包 self。
-        # 嵌套组件传入的父级回调，其方法接收者由定义处（父）的词法作用域决定，
-        # instance_exec 重绑到 emit 的 owner（子）会让父组件回调里的方法调用全部断裂。
-        handler.arity.zero? ? handler.call : handler.call(event)
-      else
-        raise ArgumentError, "无法处理的事件处理器: #{handler.inspect}"
+      # 一个事件 = 一个合并窗口（S1-1）：handler 里的多次写入只重渲染一轮，
+      # 中间态不进 DOM；分发返回前 flush 完毕（"点完即更新"的观感不变）
+      Scheduler.batch do
+        case handler
+        when Symbol
+          # 无参方法保持原语义；带参方法（如 on_key: :on_key_press）拿到事件对象
+          method(handler).arity.zero? ? send(handler) : send(handler, event)
+        when Proc
+          # 事件 Proc 是回调（区别于 REACTIVE_PROPS 的求值 Proc）：保持闭包 self。
+          # 嵌套组件传入的父级回调，其方法接收者由定义处（父）的词法作用域决定，
+          # instance_exec 重绑到 emit 的 owner（子）会让父组件回调里的方法调用全部断裂。
+          handler.arity.zero? ? handler.call : handler.call(event)
+        else
+          raise ArgumentError, "无法处理的事件处理器: #{handler.inspect}"
+        end
       end
     end
 
@@ -413,6 +457,7 @@ module Citrine
     def run_unmount_hooks
       dispose_view_effect # 先停 view 重渲染：卸载后不该再被 prop/state 打回来
       dispose_watch_effects # 先停订阅，再跑清理钩子（清理时不该再被信号打回来）
+      dispose_effects # effect 宏的 cleanup 在各自 dispose 内、订阅释放前执行（S1-8）
       refs.clear
       self.class.unmount_hooks.each { |hook| run_hook(hook) }
       dispose_computed_effects # 放在钩子之后：清理时还能读到新鲜值，跑完才释放订阅
@@ -444,6 +489,27 @@ module Citrine
 
     # 诊断/测试：当前存活的 watcher 数
     def watch_effect_count = (@watch_effects || []).size
+
+    # effect 宏的运行/释放（S1-8）：与 watch 同一套生命周期，但启用 cleanup——
+    # 块返回 Proc 时，重跑前与卸载时各执行一次
+    def run_effects
+      @effect_instances ||= []
+      return self unless @effect_instances.empty? # 重复调用（复用路径）不重复创建
+
+      self.class.effect_defs.each do |body|
+        @effect_instances << Effect.create(track_cleanup: true) { run_hook(body) }
+      end
+      self
+    end
+
+    def dispose_effects
+      @effect_instances&.each(&:dispose)
+      @effect_instances = nil
+      self
+    end
+
+    # 诊断/测试：当前存活的 effect 数
+    def effect_count = (@effect_instances || []).size
 
     # computed 的 Effect 与 watch 同理：不释放就是"卸载后还跟着上游重算"的幽灵订阅，
     # 而且会把整条组件对象图钉在信号的订阅表上（CRuby 侧实测：卸载后改 state 仍重算）。

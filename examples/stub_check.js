@@ -241,6 +241,21 @@ if (which === "counter") {
   assert("IME 组合期 Enter 不清空草稿", draftInput().value, "未上屏的候选");
   draftInput().fire("keydown", { key: "Enter" });
   assert("普通 Enter 触发 on_enter 清空", draftInput().value, "");
+
+  // S2-1：元素词表（可挂事件）+ 逃生舱
+  const list = findAll(app, "ul").find((n) => n.getAttribute("id") === "lang-list");
+  assert("ul 词表渲染", list ? list.children.length : null, 2);
+  const firstItem = list.children[0];
+  draftInput().value = "待清空";
+  draftInput().fire("input");
+  firstItem.fire("click");
+  assert("li 可挂事件（点击清空草稿）", draftInput().value, "");
+  const link = findAll(app, "a").find((n) => n.getAttribute("id") === "home-link");
+  assert("a 的 href 透传", link.getAttribute("href"), "https://example.com");
+  const logo = findAll(app, "img")[0];
+  assert("img 渲染且为空标签", logo ? logo.children.length : null, 0);
+  const custom = findAll(app, "my_widget")[0];
+  assert("element 逃生舱产出任意标签", custom ? custom.getAttribute("id") : null, "custom-one");
 }
 
 console.log(failures === 0 ? "\n全部通过 ✅" : `\n${failures} 项失败 ❌`);

@@ -56,7 +56,7 @@ class AttrPassthroughTest < Minitest::Test
 
     pairs = renderer.send(:passthrough_props, node)
     assert_equal [
-      ["id", "x"], ["aria-label", "标签"], ["data-role", "cell"], ["feature-flag", ""]
+      ["id", "x"], ["aria-label", "标签"], ["data-role", "cell"], ["feature-flag", ""], ["value", "v"]
     ], pairs, "snake_case → kebab-case；true → 空值属性；false/nil/事件/消费面不透传"
   end
 
