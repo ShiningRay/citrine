@@ -365,6 +365,7 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 | 2026-09-14 | **Todo 视觉升级**：DSL 新增 `css_class` 透传（DOM→className / SSR→class / Canvas 忽略）；动效分工定式：状态过渡用内联 `transition`，hover/focus/@keyframes 由页面级样式承载（决策 #10 的边界分工）；Canvas 增加纯色护栏（渐变值跳过绘制） | 内联样式无法表达伪类与关键帧，页面样式是正确出口；调查结论：IAB 自动化的 press 不派发键盘事件（探针证实 keydown 到达数为 0），框架无碍——真实键盘与合成事件均正常 |
 | 2026-09-14 | **Roadmap v2 制定**（第十一节）：P0 组合 API（嵌套/keyed 复用/props 传播）+ 生命周期宏 + 响应式集合 → P1 体积/构建/Fast Refresh/DevTools → P2 命名/分包/CI/文档/基准 → P3 平台扩张；附风险对冲清单 | 组件组合是当前最大 API 缺口（无嵌套则不成立"React-like"）；单人维护是三家先行者共同死因，开源与 co-maintainer 为生存项 |
 | 2026-09-14 | **正式命名定案：Citrine**（决策 #7）。完成全库重命名：`RV` → `Citrine`（模块 / lib/citrine/ / bin/citrine / 示例 / 测试 / 文档），全量回归通过（单测 + 四桩 + 重打包 CitrineCounter.app）。候选评估：常见单词名在 rubygems 全被占用，可用候选 Opaline / Rubine / Citrine / Signa 中选定 Citrine | 水晶振荡器 = 信号源的隐喻；宝石命名传统（Opal 先例）；避开 React 商标与主要冲突 |
+| 2026-09-14 | **GitHub 化 + CI 全绿**：推送至 github.com/ShiningRay/citrine（public）；GitHub Actions 三件套——CI（Ruby 3.1-3.4 矩阵 + 编译/四桩 + macOS 打包冒烟）、Release（v* 标签构建 gem 附 Release，RUBYGEMS_API_KEY 配置后自动 push）、Dependabot（bundler + actions 周更）；附 Rakefile（test/stubs 任务） | Roadmap P2-10/11 提前落地；修复：CI 上打包需 bundle exec 解析 opal 可执行文件 |
 | 2026-09-14 | **仓库化 + gem 0.1.0**：代码迁入独立 citrine/ 仓库（git init，首次提交 41 文件），gemspec + version + MIT LICENSE + .gitignore 就绪，`gem build` 通过（citrine-0.1.0.gem，21.5KB，未发布）；决策 #7 包结构定案：v1 单 gem，**npm 不做** | 源语言 Ruby → RubyGems 为唯一分发渠道；npm 的唯一例外是 P1 运行时拆分时的 citrine-runtime 预编译资产 |
 
 ## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
