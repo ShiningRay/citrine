@@ -126,13 +126,18 @@ module Citrine
       end
 
       # 挂载完成后执行（DOM 已就位）：适合 focus、定时器、第三方库初始化
-      def on_mount(handler = nil, &block)
-        mount_hooks << (block || handler)
+      #
+      # 一次可声明多个：`on_mount :a, :b` / `on_mount :a { ... }` / 只给块。
+      # 之所以用可变参数而不是单参数：**Opal 下给固定 arity 的方法多传实参不会报错**，
+      # 只是静默丢弃——CRuby 抛 ArgumentError、Opal 少跑一个钩子，是最难查的一类
+      # 平台间语义分叉（dogfooding 实测：网格 ticker 因此消失，症状是"闪烁永不清零"）。
+      def on_mount(*handlers, &block)
+        mount_hooks.concat(collect_hooks(:on_mount, handlers, block))
       end
 
-      # 组件销毁时执行：清理定时器、监听器、未完成的请求
-      def on_unmount(handler = nil, &block)
-        unmount_hooks << (block || handler)
+      # 组件销毁时执行：清理定时器、监听器、未完成的请求（同样可一次声明多个）
+      def on_unmount(*handlers, &block)
+        unmount_hooks.concat(collect_hooks(:on_unmount, handlers, block))
       end
 
       # 声明一个 window 级键盘处理器（Symbol 或 Proc）；卸载时自动解绑
@@ -143,6 +148,21 @@ module Citrine
       #   end
       def window_key(handler)
         window_key_handlers << handler
+      end
+
+      private
+
+      # on_mount / on_unmount 的参数归一：Symbol / Proc / 块；至少给一个，否则 fail fast
+      def collect_hooks(name, handlers, block)
+        hooks = block ? handlers + [block] : handlers
+        raise ArgumentError, "#{name} 需要至少一个处理器（Symbol / Proc / 块）" if hooks.empty?
+
+        hooks.each do |hook|
+          next if hook.is_a?(Symbol) || hook.is_a?(Proc)
+
+          raise ArgumentError, "#{name} 的处理器只能是 Symbol 或 Proc，收到 #{hook.inspect}"
+        end
+        hooks
       end
     end
 
