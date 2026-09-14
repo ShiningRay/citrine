@@ -28,6 +28,14 @@ module Citrine
     # 由渲染器直接当作**值**消费的 prop：收到 Proc 时明确提醒，避免"写了但不生效"。
     VALUE_PROPS = %i[value checked].freeze
 
+    # S2-2：框架未消费的属性原样透传到 DOM / SSR（id / disabled / aria_* / data_* / title …）。
+    # 命名规则：snake_case → kebab-case（aria_label → aria-label）；
+    # 布尔规则：true → 空值属性（<button disabled>）、false / nil → 不输出。
+    # 消费面（不透传）：布局快捷键、样式、受控值、复用/引用标记、事件回调（on_*）。
+    PASSTHROUGH_EXCLUDED = %i[
+      key ref style css_class placeholder direction gap value checked type
+    ].freeze
+
     def initialize
       @parents = []
       @reuse_pools = []
@@ -78,6 +86,8 @@ module Citrine
       node.reuse_key = node.props[:key]
       node.identity ||= [:element, node.type]
 
+      return mount_fragment(node, parent) if node.type == :fragment
+
       node.dom = create_dom(node)
       warn_unreactive_proc(node)
       register_ref(node)
@@ -111,48 +121,156 @@ module Citrine
       node
     end
 
+    # 透明容器（S1-4）：children 插槽的落位节点。无自身 DOM——借父容器的，
+    # 子孙 attach 经它落到真实父容器；不参与属性/事件（也没有 props 可言）。
+    def mount_fragment(node, parent)
+      node.dom = parent.dom
+      parent.children << node
+      if reactive?
+        node.block_effect = Effect.create do
+          run_block(node) { node.owner.instance_exec(&node.block) }
+        end
+        node.owned_effects << node.block_effect
+      else
+        run_block(node) { node.owner.instance_exec(&node.block) }
+      end
+      finalize(node)
+      node
+    end
+
     # 嵌套组件入口（Component#render 调用）。
     #
-    # 约定（P0-1/S1）：子组件的 view 必须渲染**恰好一个根节点**——那个节点就是组件的
-    # 复用/销毁单位（不引入虚拟边界层：没有 DOM 中间层，重排就是移动真实节点）。
-    # 复用 = 同一个子组件实例 + 同一个根节点：就地更新 props，并重跑 view 把输出
-    # 调和回这棵根（同一批 DOM、state、Effect 全保留）。
-    def render_component(owner, component, props)
+    # 复用单位 = 子组件实例（+它的根节点）。同类组件落到同一槽位即复用（S1-2）：
+    # props 差异经 prop 信号原地传播，实例与 state 保留；子组件 view 在**自己的
+    # Effect** 里执行（首次挂载创建），prop/state 的 view 体读取都订阅它——
+    # 父块不再因子组件重渲染而重跑，prop 写入也不会再入正在运行的父块。
+    # 带 block 调用即插槽（S1-4）：块由子组件经 children 落位，块内 self 是父组件。
+    def render_component(owner, component, props, &children_block)
       raise "Citrine.render：没有父节点（只能在组件的 view 里渲染子组件）" unless @parents.last
 
       klass = component.is_a?(Class) ? component : component.class
       key = props[:key]
-      child_props = props.reject { |name, _| name == :key }
-      identity = [:component, klass]
+      ref_name = props[:ref]
+      child_props = props.reject { |name, _| name == :key || name == :ref }
 
-      if (existing = reusable_node(key, identity, child_props, owner))
+      if (existing = reusable_node(key, [:component, klass], child_props, owner))
         child = existing.rendered_component
+        existing.component_props = child_props
         child.update_props(child_props) if component.is_a?(Class) && child.respond_to?(:update_props)
-        return refresh_component_view(existing, child, identity, key, child_props)
+        child.set_children_block(children_block, owner) if child.respond_to?(:set_children_block)
+        register_component_ref(owner, ref_name, child)
+        return child.respond_to?(:root) && child.root ? child.root : existing
       end
 
       child = component.is_a?(Class) ? klass.new(child_props) : component
-      node = capture_component_root(child)
-      adopt_root(node, child, identity, key, child_props)
+      child.set_children_block(children_block, owner) if child.respond_to?(:set_children_block)
+      parent = @parents.last
+      if reactive? && child.respond_to?(:view_effect=)
+        child.view_effect = Effect.create do
+          child.root ? rerun_component_view(child, parent) : first_component_render(child, parent, klass, key, child_props)
+        end
+        node = child.root
+      else
+        node = first_component_render(child, parent, klass, key, child_props)
+      end
+      register_component_ref(owner, ref_name, child)
       register_window_keys(child)
       child.run_mount_hooks if child.respond_to?(:run_mount_hooks)
       child.run_watch_effects if reactive? && child.respond_to?(:run_watch_effects)
       node
     end
 
-    # 跑一次子组件 view，要求恰好产出一个根节点，并返回它（已挂在当前父下）
-    def capture_component_root(child)
-      parent = @parents.last
+    # 首次渲染子组件 view，收编输出为组件根：恰好一个真实节点 → 该节点就是根；
+    # 多个 → 包进透明 fragment（复用/销毁单位仍是组件实例）。
+    def first_component_render(child, parent, klass, key, child_props)
       before = parent.children.size
       child.instance_exec { view }
       added = parent.children[before..] || []
-      unless added.size == 1
-        names = added.map { |n| n.type }.join(", ")
-        raise "Citrine.render：子组件的 view 必须渲染**恰好一个**根节点，" \
-              "实际 #{added.size} 个（#{names.empty? ? '无' : names}）；多根或纯文本请自行包一层 stack { }"
+      if added.empty?
+        raise "Citrine.render：子组件的 view 必须渲染**至少一个**根节点，实际 0 个；" \
+              "纯文本请包一层 label { }，多根会按 fragment 处理"
       end
 
-      added.first
+      node = if added.size == 1
+               added.first
+             else
+               wrap_fragment(added, parent, before, child)
+             end
+      adopt_root(node, child, [:component, klass], key, child_props)
+      node
+    end
+
+    # 子组件 view 的后续重跑（prop/state 信号触发）：原地调和回既有根。
+    # mount/reusable 的 attach 一律追加到末尾，信号驱动的重跑发生在父块渲染之外，
+    # 因此 reconcile 后要把根挪回原渲染位（attach_before），保持兄弟次序。
+    def rerun_component_view(child, parent)
+      node = child.root
+      return rerun_fragment_view(child, node, parent) if node.type == :fragment
+
+      index = parent.children.index(node)
+      raise "Citrine.render：子组件 #{child.class} 的根不在宿主容器里（正常流程不可达）" unless index
+
+      anchor = parent.children[index + 1]
+      parent.children.delete(node)
+      size_before = parent.children.size
+      pool = ReusePool.new([node])
+      @parents.push(parent)
+      @reuse_pools.push(pool)
+      child.instance_exec { view }
+      if parent.children.size != size_before + 1
+        raise "Citrine.render：子组件的 view 必须渲染**恰好一个**根节点，" \
+              "实际 #{parent.children.size - size_before} 个；多根或纯文本请自行包一层 stack { }"
+      end
+
+      new_root = parent.children.pop
+      parent.children.insert(index, new_root)
+      unless new_root.equal?(node)
+        # 根元素换了类型：旧根整棵卸载，但**组件实例仍然活着**（S3-2 的边界摘除舞步）：
+        # 先摘组件边界再 dispose，dispose 就不会误跑 on_unmount / 解绑全局键盘。
+        node.rendered_component = nil
+        adopt_root(new_root, child, node.component_identity, node.reuse_key, node.component_props)
+      end
+      reposition(new_root, parent, anchor)
+    ensure
+      @parents.pop
+      @reuse_pools&.pop
+      pool&.unused_nodes&.each { |old| dispose(old) }
+    end
+
+    # 多根子组件的重跑：把 fragment 当块容器重跑（子根经 fragment.dom 落到真实父容器）
+    def rerun_fragment_view(child, frag, parent)
+      index = parent.children.index(frag)
+      return unless index
+
+      anchor = parent.children[index + 1]
+      parent.children.delete(frag)
+      pool = ReusePool.new(frag.children.dup)
+      frag.children.clear
+      @parents.push(frag)
+      @reuse_pools.push(pool)
+      child.instance_exec { view }
+    ensure
+      @parents.pop
+      @reuse_pools&.pop
+      pool&.unused_nodes&.each { |old| dispose(old) }
+      if index && !parent.children[index].equal?(frag)
+        parent.children.insert(index, frag)
+      end
+      frag.children.each { |n| reposition(n, parent, anchor) if index }
+    end
+
+    # 多根输出 → 透明 fragment：子根已在 parent.dom 里（view 挂载时 attach 的），
+    # 树上收拢到 fragment 名下、fragment 占据首个子根的原渲染位。
+    # dom 借父容器的（与 mount_fragment 同一口径）：子根 attach 经它落到真实父容器。
+    def wrap_fragment(added, parent, index, child)
+      fragment = Node.new(:fragment, {}, nil, owner: child)
+      fragment.identity = [:element, :fragment]
+      fragment.dom = parent.dom
+      added.each { |n| parent.children.delete(n) }
+      fragment.children.concat(added)
+      parent.children.insert(index, fragment)
+      finalize(fragment)
+      fragment
     end
 
     # 把一个真实节点标记为"某子组件的根"（复用 / 卸载 / 生命周期都以它为单位）
@@ -166,30 +284,13 @@ module Citrine
       node
     end
 
-    # 复用：重跑子组件 view，把输出调和回既有根节点；根节点换了类型就换新（返回新节点）
-    def refresh_component_view(node, child, identity, key, child_props)
-      parent = @parents.last
-      @reuse_pools.push(ReusePool.new([node]))
-      parent.children.delete(node) # view 重跑时会按位置把它重新计入
-      refreshed = begin
-        capture_component_root(child)
-      ensure
-        @reuse_pools.pop
-      end
+    # S1-9：ref: :name 登记的是**子组件实例**（元素 ref 登记平台句柄），
+    # 父经 refs 取到实例即可调用其公开方法。复用/重建两条路径都重新登记，
+    # 保证指向当前活着的实例。
+    def register_component_ref(owner, name, child)
+      return unless name && owner.respond_to?(:refs)
 
-      if refreshed.equal?(node)
-        node.component_props = child_props
-        node
-      else
-        # 旧根整棵卸载，但**组件实例仍然活着**：这不是组件卸载，只是它的根换了元素类型。
-        # 先摘掉组件边界再 dispose——否则 dispose 会把它当成卸载（误跑 on_unmount +
-        # 解绑全局键盘），而 adopt_root 不会重新注册，window_key 就此静默失效。
-        # 子树里真正的子组件（孙子）仍由 dispose 递归正常卸载。
-        node.rendered_component = nil
-        dispose(node)
-        adopt_root(refreshed, child, identity, key, child_props)
-        refreshed
-      end
+      owner.refs[name] = child
     end
 
     # 复用匹配：key 优先，没有 key 时按"本次第几个子节点"对位（React 的隐含位置 key）。
@@ -203,7 +304,8 @@ module Citrine
 
       # 复用的节点要重新计入当前父的子节点表（本轮开始时已清空），顺序由追加次序决定
       @parents.last.children << node
-      attach(node, @parents.last)
+      # fragment 无自身 DOM（借父容器的），没有可挂的东西
+      attach(node, @parents.last) unless node.type == :fragment
       node
     end
 
@@ -288,8 +390,10 @@ module Citrine
         return nil if @taken.key?(candidate.object_id)
 
         if identity.first == :component
-          # 组件槽位：候选就是**旧组件**的根，owner 天然属于那个子组件，故只比组件身份与 props
-          return nil unless candidate.component_identity == identity && same_props?(candidate.component_props, props)
+          # 组件槽位（S1-2）：同类组件落到同一槽位即复用——props 差异经 prop 信号
+          # 原地传播（读它的块才重跑），不再作为"变了就重建"的依据；
+          # 按 props 比较会让父每次重传都重建子组件、丢光子组件 state。
+          return nil unless candidate.component_identity == identity
         else
           # 元素槽位：keyed 与位置匹配都要求"由同一个组件渲染出来的节点"
           return nil unless candidate.owner.equal?(requester)
@@ -317,7 +421,7 @@ module Citrine
       private
 
       # 比较 props 时忽略 key 与 Proc：Proc（响应式属性 / 回调）每次都是新对象，
-      # 不能作为"变了"的依据（S2 会让它们真正参与更新）
+      # 不能作为"变了"的依据（仅元素槽位还在用它；组件槽位走信号传播，S1-2）
       def same_props?(old_props, new_props)
         comparable(old_props) == comparable(new_props)
       end
@@ -352,7 +456,8 @@ module Citrine
         child.run_unmount_hooks if child.respond_to?(:run_unmount_hooks)
       end
 
-      detach(node)
+      # 透明容器（fragment）无自身 DOM：子根挂在真实父容器上，不能对它做 detach
+      detach(node) unless node.type == :fragment
     end
 
     # box 支持布局快捷参数：direction（stack/flow 的抽象）、gap
@@ -383,6 +488,23 @@ module Citrine
       node.props.any? { |key, value| value.is_a?(Proc) && REACTIVE_PROPS.include?(key) }
     end
 
+    # ── S2-2：属性透传 ─────────────────────────────────────
+
+    def passthrough_prop?(name)
+      !PASSTHROUGH_EXCLUDED.include?(name) && !name.to_s.start_with?("on_")
+    end
+
+    # 未消费属性 → [[kebab-case 名, 字符串值]]。true → ""（空值属性）；false / nil 不输出。
+    # DOM 与 SSR 两侧共用同一口径，保证输出一致。
+    def passthrough_props(node)
+      node.props.map do |name, value|
+        next unless passthrough_prop?(name)
+        next if value.nil? || value == false
+
+        [Style.kebab(name), value == true ? "" : value.to_s]
+      end.compact
+    end
+
     # 响应式 style 会换掉整份内联样式：记录本次的键，返回需要显式清空的旧键
     # （否则 `style: -> { { background: ok ? "green" : nil } }` 里的绿色会残留）
     def track_style_keys(node, keys)
@@ -391,9 +513,12 @@ module Citrine
       stale
     end
 
-    # 值类 prop 收到 Proc 时提醒一次：它既不会被求值、也不会订阅
+    # 值类 prop / 透传属性收到 Proc 时提醒一次：它们不会被求值、也不会订阅
     def warn_unreactive_proc(node)
-      bad = node.props.select { |key, value| value.is_a?(Proc) && VALUE_PROPS.include?(key) }
+      bad = node.props.select do |key, value|
+        value.is_a?(Proc) && !REACTIVE_PROPS.include?(key) &&
+          (VALUE_PROPS.include?(key) || passthrough_prop?(key))
+      end
       return if bad.empty? || !respond_to?(:warn, true)
 
       @warned_value_procs ||= {}
@@ -450,6 +575,21 @@ module Citrine
       return unless component.respond_to?(:run_unmount_hooks)
 
       component.class.window_key_handlers.each { |handler| register_window_key(component, handler) }
+    end
+
+    # ── 信号驱动重跑的落位（S1-2）────────────────────────────
+    # mount / reusable 的 attach 一律追加到父容器末尾；子组件 view 的信号重跑发生在
+    # 父块渲染之外，reconcile 完必须把根挪回原渲染位，否则它会排到后续兄弟后面。
+
+    # anchor = 原位后面的兄弟 Node；nil 表示本来就该排最后（attach 已就位，无需动）
+    def reposition(node, parent, anchor)
+      attach_before(node, parent, anchor) if anchor
+    end
+
+    # 平台钩子：把 node 挪到 parent 内 anchor 之前。默认无操作——
+    # 线性追加式渲染器按渲染序落位（如 Canvas 全量重绘按树遍历），无需移动。
+    def attach_before(_node, _parent, _anchor)
+      nil
     end
 
     # ── 平台钩子 ───────────────────────────────────────────

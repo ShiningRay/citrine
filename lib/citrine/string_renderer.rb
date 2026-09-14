@@ -42,6 +42,12 @@ module Citrine
     def setup_widget(_node); end
 
     def finalize(node)
+      if node.type == :fragment
+        # 透明容器（S1-4）：多根子组件 / children 的序列化就是子根依次拼接
+        node.dom = node.children.map(&:dom).join
+        node.dom += escape_html(node.text) if node.text
+        return
+      end
       return if node.type == :root
 
       node.dom = serialize(node)
@@ -65,7 +71,7 @@ module Citrine
       out << %(class="#{escape_html(css_class)}") if css_class
       case node.type
       when :text_input
-        out << 'type="text"'
+        out << %(type="#{escape_html(node.props[:type] || "text")}")
         if (placeholder = prop_value(node, node.props[:placeholder]))
           out << %(placeholder="#{escape_html(placeholder)}")
         end
@@ -74,7 +80,14 @@ module Citrine
         out << %(value="#{escape_html(value)}") if value && value != ""
       when :check_box
         out << 'type="checkbox"'
-        out << "checked" if node.props[:checked]
+        checked = node.props[:checked]
+        checked = checked.get if checked.is_a?(Signal)
+        out << "checked" if checked
+      end
+      # S2-2：未消费属性原样透传，口径与 DOM 一致（kebab-case；true → 空值属性；
+      # false / nil 不输出）。值同样要转义——理由与 class 相同。
+      passthrough_props(node).each do |name, value|
+        out << (value.empty? ? name : %(#{name}="#{escape_html(value)}"))
       end
       style = resolve_style(node)
       out << %(style="#{style_css(style)}") unless style.empty?

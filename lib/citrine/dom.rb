@@ -39,6 +39,13 @@ module Citrine
       parent.dom.appendChild(node.dom)
     end
 
+    # S1-2：view 重跑把节点 append 到末尾；按 anchor 挪回原渲染位（保持兄弟次序）。
+    # anchor 已在基类保证非 nil；fragment 无自身 DOM，取它第一个子根作插入锚点。
+    def attach_before(node, parent, anchor)
+      ref = anchor.type == :fragment ? anchor.children.first&.dom : anchor.dom
+      parent.dom.insertBefore(node.dom, ref) if ref
+    end
+
     def detach(node)
       parent_dom = node.dom[:parentElement]
       parent_dom.removeChild(node.dom) if parent_dom
@@ -56,6 +63,16 @@ module Citrine
       # 响应式 style 换掉整份内联样式：先清掉本次不再出现的旧键（错误态高亮必须能消失）
       track_style_keys(node, style.keys).each { |key| el[:style][Style.camel(key)] = "" }
       style.each { |key, value| el[:style][Style.camel(key)] = value.to_s }
+
+      # S2-2：未消费属性原样透传（id / disabled / aria-* / data-* / title…）。
+      # 值可以是响应式的——值翻 false/nil 时属性要能消失，所以记下应用过的键、先清旧键。
+      applied = passthrough_props(node)
+      applied_names = applied.map { |(name, _)| name }
+      (node.applied_attrs || []).each do |stale|
+        el.removeAttribute(stale) unless applied_names.include?(stale)
+      end
+      node.applied_attrs = applied_names
+      applied.each { |(name, value)| el.setAttribute(name, value) }
 
       ensure_events(node) # 复用路径上新增的处理器在此补齐（幂等）
     end
@@ -91,11 +108,20 @@ module Citrine
       ensure_event(node, :enter, :on_enter, "keydown") do |event|
         ev = Native(event)
         handler = node.props[:on_enter]
-        owner.handle_event(handler, ev) if handler && ev[:key] == "Enter"
+        # IME 组合（S2-4）：选词确认的 Enter 不触发 on_enter
+        next unless handler && ev[:key] == "Enter" && ev[:isComposing] != true
+
+        owner.handle_event(handler, ev)
       end
       ensure_event(node, :change, :on_change, "change") do |_event|
         handler = node.props[:on_change]
-        owner.handle_event(handler, node.dom[:checked]) if handler
+        next unless handler
+
+        # 受控语义（S2-4）：checked 传 Signal 时真正双向绑定——先写回再派发，
+        # 处理器读到的是新勾选态（与 text_input 的 value 对称）
+        checked = node.props[:checked]
+        checked.set(node.dom[:checked]) if checked.is_a?(Signal)
+        owner.handle_event(handler, node.dom[:checked])
       end
     end
 
@@ -134,6 +160,9 @@ module Citrine
     end
 
     def set_text(node, text)
+      # 透明容器没有自己的文本位（借的是父容器的 DOM，写它会砸掉兄弟内容）
+      return if node.type == :fragment
+
       node.dom[:textContent] = text.to_s
     end
 
@@ -146,7 +175,7 @@ module Citrine
 
     def setup_text_input(node)
       el = node.dom
-      el[:type] = "text"
+      el[:type] = node.props[:type] || "text"
       value = node.props[:value]
       if value.is_a?(Signal)
         node.owned_effects << Effect.create { el[:value] = value.get.to_s }

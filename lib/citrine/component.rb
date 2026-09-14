@@ -25,7 +25,7 @@ module Citrine
   #   end
   class Component
     # 元素 DSL 方法名：prop 不能与它们重名（否则读 prop 会覆盖元素方法）
-    DSL_METHODS = %i[box stack row label button text_input check_box render].freeze
+    DSL_METHODS = %i[box stack row label button text_input check_box render children].freeze
 
     class << self
       def prop_defs
@@ -49,7 +49,7 @@ module Citrine
         end
 
         prop_defs[name] = { type: type, default: default }
-        define_method(name) { @props[name] }
+        define_method(name) { read_prop(name) }
       end
 
       # 可变状态：读写受追踪，写入触发订阅该状态的 block 重跑
@@ -192,6 +192,11 @@ module Citrine
     # 组件挂载的根节点与所属渲染器（挂载时由渲染器写入；卸载时用）
     attr_accessor :root, :renderer
 
+    # 子组件 view 的 Effect（S1-2）：渲染器在子组件首次挂载时创建——view 体读到的
+    # prop/state 订阅落在这里，之后 prop 重传或自身 state 变化只重跑这个 Effect
+    # 原地调和，不再借道父块。随组件卸载一起释放。
+    attr_accessor :view_effect
+
     # ref: :name 的元素句柄（DOM 下是元素本身）；挂载时登记，卸载时清空
     def refs
       @refs ||= {}
@@ -236,7 +241,8 @@ module Citrine
 
     # 父组件重传 props（嵌套复用时的就地更新，P0-1/S1）：
     # 校验口径与 initialize 完全一致（未声明 prop / 类型不符都当场报错）。
-    # 子组件侧的读法不变（prop :x 仍是只读），S2 会把它们升级成信号以获得细粒度更新。
+    # 子组件侧的读法不变（prop :x 仍是只读）；写入走 prop 信号（S1-2）：
+    # 值变化只通知真正读过该 prop 的块，子组件实例与 state 原地保留。
     def update_props(new_props)
       defs = self.class.prop_defs
       unexpected = new_props.keys - defs.keys
@@ -248,9 +254,26 @@ module Citrine
           raise TypeError, "prop #{name} 应为 #{definition[:type]}，实际为 #{value.class}"
         end
 
-        @props[name] = value
+        signal = (prop_signals[name] ||= Signal.new(@props[name]))
+        @props[name] = value # props 读法保持明值（introspection / 非响应式读取不建订阅）
+        if value.is_a?(Proc) && signal.peek.is_a?(Proc)
+          signal.replace(value) # 回调每次渲染都是新对象：只换引用，不算变更
+        else
+          signal.set(value)
+        end
       end
       self
+    end
+
+    # ── S1-2：prop 的响应式通道 ────────────────────────────────
+    # 声明过的 prop 第一次被读取（或被父重传）时升级为信号——此后在 Effect 内
+    # 读取即订阅，父重传新值只有真正读它的块重跑；没读过的 prop 只是明值。
+    def prop_signals
+      @prop_signals ||= {}
+    end
+
+    def read_prop(name)
+      (prop_signals[name] ||= Signal.new(@props[name])).get
     end
 
     def computations
@@ -312,15 +335,41 @@ module Citrine
     #   render(WatchRow, code: code, key: code)   # 传类 + props（推荐）
     #   render(row_instance, key: code)           # 传实例（props 由实例自己持有）
     # 需要复用实例/state 时给 key：同一层（同一父节点下）key 相同的子组件会被保留。
+    # 带块调用即插槽（S1-4）：块延迟到子组件 view 里调用 children 的位置才求值，
+    # 块内 self 是父组件（词法作用域），父 state 变化只重跑 children 所在的块。
     def render(component, **props, &block)
-      raise ArgumentError, "render 暂不支持 block（子组件插槽留待 S3）" if block
-
       unless component.is_a?(Class)
-        extra = props.keys - [:key]
+        extra = props.keys - [:key, :ref]
         raise ArgumentError, "render(实例) 不能再传 props（#{extra.join(', ')}）：props 由实例自己持有" unless extra.empty?
       end
 
-      Citrine.renderer.render_component(self, component, props)
+      Citrine.renderer.render_component(self, component, props, &block)
+    end
+
+    # ── 插槽（S1-4）：render(Child) { … } 的内容落位 ───────────
+    # 子组件在 view 里调用 children，把父传入的块渲染到该位置。块没有响应式读取时
+    # 只渲染一次；读了父 state/信号则由自己的块 Effect 驱动原地更新。
+    def children
+      return nil unless children_presence.get # 订阅：块出现/消失时重跑读它的块
+
+      node = Node.new(:fragment, {}, children_block, owner: children_owner)
+      Citrine.renderer.mount(node)
+      node
+    end
+
+    # children 块由渲染器在挂载/复用子组件时写入（父组件实例 + 块）
+    attr_accessor :children_block, :children_owner
+
+    def children_presence
+      @children_presence ||= Signal.new(!children_block.nil?)
+    end
+
+    # 渲染器复用路径调用：块出现/消失才翻转 presence（Proc 身份每次重传都不同，不作变更依据）
+    def set_children_block(block, owner)
+      @children_block = block
+      @children_owner = owner
+      children_presence.set(!block.nil?)
+      self
     end
 
     # ── 内部 ────────────────────────────────────────────────
@@ -362,10 +411,17 @@ module Citrine
     end
 
     def run_unmount_hooks
+      dispose_view_effect # 先停 view 重渲染：卸载后不该再被 prop/state 打回来
       dispose_watch_effects # 先停订阅，再跑清理钩子（清理时不该再被信号打回来）
       refs.clear
       self.class.unmount_hooks.each { |hook| run_hook(hook) }
       dispose_computed_effects # 放在钩子之后：清理时还能读到新鲜值，跑完才释放订阅
+    end
+
+    def dispose_view_effect
+      @view_effect&.dispose
+      @view_effect = nil
+      self
     end
 
     # 声明过的 watch 体各起一个 Effect：挂载后跑一次，之后依赖变化就重跑。

@@ -5,6 +5,7 @@
 /examples/todo.js
 /examples/reactive_props.js
 /examples/keyed_list.js
+/examples/props_widgets.js
 /examples/canvas_counter.js
 /examples/canvas_todo.js
 *.gem

@@ -69,6 +69,14 @@ module Citrine
       redraw if @parents.empty?
     end
 
+    # 子组件 view 的信号重跑（S1-2）发生在父块渲染之外：重跑收尾时补一次整体重绘。
+    # 若重跑本身嵌在别的渲染过程里（@parents 非空），仍由最外层 finalize 统一重绘。
+    def rerun_component_view(child, parent)
+      super
+    ensure
+      redraw if @parents.empty?
+    end
+
     # ── 事件（命中检测 → 分发） ─────────────────────────────
 
     def handle_canvas_click(x, y)
@@ -88,8 +96,14 @@ module Citrine
         handler = node.props[:on_click]
         node.owner.handle_event(handler) if handler
       when :check_box
+        checked = node.props[:checked]
+        checked = checked.get if checked.is_a?(Signal)
         handler = node.props[:on_change]
-        node.owner.handle_event(handler, !node.props[:checked]) if handler
+        return unless handler
+
+        # 受控语义（S2-4）：先写回信号再调处理器，处理器读到的是新勾选态
+        node.props[:checked].set(!checked) if node.props[:checked].is_a?(Signal)
+        node.owner.handle_event(handler, !checked)
       when :text_input
         dispatch_text_input(node)
       end
@@ -123,7 +137,8 @@ module Citrine
     end
 
     def box?(node)
-      node.type == :root || node.type == :box
+      # fragment（S1-4）：透明容器按容器参与布局，让多根子组件在画布上照常展开
+      node.type == :root || node.type == :box || node.type == :fragment
     end
 
     def box_axes(node)
@@ -202,6 +217,9 @@ module Citrine
           @ctx.fillRect(node.dom[:x], node.dom[:y], node.dom[:w], node.dom[:h])
         end
         node.children.each { |child| paint(child) }
+      when :fragment
+        # 透明容器：只递归子根，自身不占绘制
+        node.children.each { |child| paint(child) }
       when :label
         paint_label(node)
       when :button
@@ -270,7 +288,9 @@ module Citrine
       @ctx.strokeStyle = "#666"
       @ctx.strokeRect(box[:x], box[:y], box[:w], box[:h])
       @hits << [box, node]
-      return unless node.props[:checked]
+      checked = node.props[:checked]
+      checked = checked.get if checked.is_a?(Signal)
+      return unless checked
 
       @ctx.fillStyle = "#333"
       @ctx.font = "14px sans-serif"

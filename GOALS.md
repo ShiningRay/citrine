@@ -325,6 +325,36 @@ box(
 - 平台边界：DOM 幂等重设属性（事件绑定拆到 `bind_events`，避免重复挂监听）；SSR 只求值一次；
   Canvas 在绘制时求值。响应式 `style` 换掉整份内联样式，消失的键会被显式清空（错误态高亮必须能消失）
 
+### props 响应式传播（S1-2，2026-09-15 增补）
+
+声明的 prop（`prop :title`）第一次被读取或被父重传时升级为 `Signal`：
+
+- **读才订阅**：`"#{title}"` 落在哪个块 Effect 里，title 变化就只重跑那个块；
+  没读过的 prop 只是明值（`props[:title]` 仍可取明值，不建订阅）。
+- **父重传 = 信号写入**：父块重跑 → 组件槽位按"同类组件 + key/位置"复用
+  （不再比较 props 值）→ `update_props` 逐个 prop `set`——实例与 state 原地保留。
+- **子组件 view 有自己的 Effect**（`child.view_effect`）：view 体读到的 prop/state
+  订阅落在子组件上，信号重跑经 `rerun_component_view` 原地调和回既有根
+  （根换类型走 S3-2 的边界摘除舞步；根按 `attach_before` 挪回原渲染位），
+  父块不再被孙辈的状态订阅牵连，prop 写入也不会再入正在运行的父块。
+- **回调 prop（Proc）只换引用**：每次渲染都是新 Proc，静默 `replace` 不算变更
+  （与 keyed 复用忽略 Proc 同口径）。
+
+### 插槽 children / 组件 ref（S1-4 / S1-9，2026-09-15 增补）
+
+```ruby
+class Dialog < Citrine::Component
+  def view = stack { children }     # 父传块的落位点（可多次调用=同一份内容）
+end
+
+render(Dialog) { label { "内容" } }  # 块延迟到 children 处求值，self 是父组件
+render(Row, ref: :row)               # refs[:row] = 子组件实例，父可直接调其方法
+```
+
+- children 块读了父信号 → 由自己的块 Effect 原地更新（DOM 不换新）；
+  块的出现/消失经 presence 信号翻转驱动。
+- 子组件 view 输出多根不再报错：包进透明 fragment（复用/销毁单位仍是组件实例）。
+
 ### 生命周期与键盘（G-9 / G-10，2026-09-14 增补）
 
 v1 不做组件嵌套（F5），但"组件自己管资源"仍缺了三样，键盘优先的应用尤其吃亏：
@@ -467,7 +497,11 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 
 | 2026-09-14 | **响应式集合 D 增补**：`ListSignal` 加 `include Enumerable`（`find` / `select` / `count` / `min` / `max` / `sum` / `sort_by` …，都经 `each` 因而可响应）；`push_bounded` / `unshift_bounded`（有上限列表**一次通知**——`<<` 再 `shift` 会通知两次，等于每档多渲染一遍，这是 dogfooding 实测出来的坑）；`dup` / `clone` 返回集合副本而不是克隆信号对象；`signal_list(Hash)` / `signal_list(42)` 当场报错（Hash 会被 `to_a` 悄悄拆成键值对）；新增 `Signal#peek` 读值但不订阅（"取值"与"订阅"解耦，MobX 的 untracked）。新增 test/list_signal_followup_test.rb（9 项） | 这些缺口是 demo 迁移时逐条撞出来的：`cancel_order` 要写 `@orders.get.find`（Enumerable 缺失）、`@curve` 的三步手工同步要压成一次 `replace`（缺防呆写法）、`@orders.dup` 差点意思（`dup` 落到 `Object#dup`）。补在框架侧比让每个应用各踩一遍便宜 |
 
-| 2026-09-14 | **声明式订阅 `watch`**：类宏 `watch :method` / `watch { ... }`（可一次声明多个、子类继承）——挂载后跑一次，之后它读到的信号一变就重跑，卸载时框架自动 dispose，免去每个 watcher 手写 `Effect.create` + `on_unmount` 里 dispose 的样板（两个 demo 各有若干处）。实现要点：Effect 由**响应式**渲染器在挂载路径上创建（`reactive?` 为真才建，SSR 不建），dispose 放在 `run_unmount_hooks` 最前面（先停订阅再跑清理钩子）。新增 test/watch_test.rb（7 项，含"SSR 不创建 watcher"与"卸载后不再被信号打回"） | 两个 demo 的 agent 独立报了同一个缺口：手写 Effect + dispose 配对容易漏（漏了就是"卸载后还在跑"的幽灵订阅）。放在框架里一次做对；顺序问题（先 dispose 再跑清理）也是踩过才知道的 |## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
+| 2026-09-14 | **声明式订阅 `watch`**：类宏 `watch :method` / `watch { ... }`（可一次声明多个、子类继承）——挂载后跑一次，之后它读到的信号一变就重跑，卸载时框架自动 dispose，免去每个 watcher 手写 `Effect.create` + `on_unmount` 里 dispose 的样板（两个 demo 各有若干处）。实现要点：Effect 由**响应式**渲染器在挂载路径上创建（`reactive?` 为真才建，SSR 不建），dispose 放在 `run_unmount_hooks` 最前面（先停订阅再跑清理钩子）。新增 test/watch_test.rb（7 项，含"SSR 不创建 watcher"与"卸载后不再被信号打回"） | 两个 demo 的 agent 独立报了同一个缺口：手写 Effect + dispose 配对容易漏（漏了就是"卸载后还在跑"的幽灵订阅）。放在框架里一次做对；顺序问题（先 dispose 再跑清理）也是踩过才知道的 |
+
+| 2026-09-15 | **props 响应式传播 + 子组件 view Effect（S1-2）**：声明的 prop 第一次被读取/重传时升级为 `Signal`——父重传走 `update_props` → 信号广播，**只有真正读该 prop 的块重跑**，子组件实例与 state 原地保留（组件槽位复用不再比较 props，改按"同类组件落同一槽位"匹配）。配套把子组件 view 从"借道父块执行"改为**自己的 view Effect**（`child.view_effect`，卸载时 dispose）：view 体读到的 prop/state 订阅落在子组件上，信号重跑经 `rerun_component_view` 原地调和（根换类型沿用 S3-2 的边界摘除舞步；根挪回原渲染位靠新钩子 `attach_before`，DOM 侧 insertBefore）。回调类 prop（Proc）重传只静默换引用（`Signal#replace`），不算变更。多根子组件输出按透明 fragment 处理（S1-4）。新增 test/props_signal_test.rb（5 项）+ nesting_test 反转/新增 9 项 | 这是 React 模型的核心："父更新 → 子更新且保留状态"。此前 props 一变即整体重建（state/焦点/Effect 全丢），beryl 只能立法"交互态必须受控"绕开。view Effect 同时消掉了两个隐患：prop 写入会再入正在运行的父块；父块被孙辈状态订阅导致的粗粒度重渲染 |
+| 2026-09-15 | **插槽 children + 组件 ref（S1-4 / S1-9）**：`render(Child) { … }` 的块延迟到子组件 view 里调用 `children` 的位置求值（块内 self 是父组件，读了父信号由自己的块 Effect 原地更新；块的出现/消失经 presence 信号翻转）。组件 `ref: :name` 语义改为"登记子组件实例"（元素 ref 仍是平台句柄），复用/重建两条路径都重新登记 | 容器组件（Tabs/Dialog）此前写不了，只能 `content:` Proc prop 模拟；父调子方法只能绕内部字段（F25） |
+| 2026-09-15 | **属性透传 + 受控 check_box + IME（S2-2 / S2-4）+ 样式单位推断（S2-5 前半）**：框架未消费的属性（id/disabled/aria_*/data_*/title…）原样透传到 DOM 与 SSR——snake_case → kebab-case，`true` → 空值属性，`false`/`nil` 不输出，值转义，响应式值翻 false 时清掉旧属性（`applied_attrs`）；`check_box(checked: Signal)` 真正双向绑定（change 先写回再派发）；`on_enter` 在 IME 组合期（isComposing）不触发；`font_size`/`letter_spacing`/`gap` 等排版键数值补 px（SSR 不再输出非法 CSS）。`text_input` 支持 `type: "password"` 覆写。桩验收增 props_widgets 套（DOM 侧断言） | `disabled`/`aria-*` 静默丢弃让无障碍、E2E 选择器、原生表单语义全部缺位（F11）；`check_box` 受控名不副实；`font-size:14` 是非法 CSS（浏览器整条丢弃，SSR 与 DOM 输出不一致） |## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
 
 > 定位：从"完整 demo"走向"能用 → 好用 → 是个开源项目"。
 
@@ -479,8 +513,9 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
    - **keyed 实例复用**：父块重建时按 key 复用子组件实例，否则状态全丢；
    - **props 响应式传播**：props 从"创建时快照"升级为可更新（父重传 →
      子组件读取 props 的块失效重跑）。这三个子问题本质上是同一件事。
-     *（2026-09-14 部分落地：见第七节"响应式属性"——节点自身的值可响应；
-     跨组件 props 重传仍待做）*
+     *（已落地：节点自身的值可响应见第七节"响应式属性"；跨组件 props 重传于
+     2026-09-15 落地——prop 升级为信号，父重传只有读它的块重跑，见第七节
+     "props 响应式传播"）*
 2. **生命周期宏**：兑现第七节承诺的 `effect` / `watch` / `on_mount` /
    `on_unmount`（当前只实现了 state / computed 两宏）。
 3. **响应式集合**：ReactiveArray / ReactiveHash（`items << x` 直接触发），

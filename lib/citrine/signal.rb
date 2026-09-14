@@ -42,6 +42,14 @@ module Citrine
     # 惰性初值是否还没求过（诊断用）
     def lazy? = !@init.nil?
 
+    # 静默换值：不广播、不触发任何订阅者。用于"每次重传都是新对象的回调类 prop"
+    # （S1-2）：换引用不算变更，与 keyed 复用忽略 Proc 的口径一致。
+    def replace(new_value)
+      @init = nil
+      @value = new_value
+      self
+    end
+
     # 以下两个方法供 Effect 内部使用
 
     def subscribe(effect)

@@ -43,6 +43,15 @@ class NestingRenderer < Citrine::Renderer
     parent.dom.children << node.dom
   end
 
+  # S1-2：信号驱动的 view 重跑把根挪回原渲染位（镜像真实 DOM 的 insertBefore 语义）
+  def attach_before(node, parent, anchor)
+    dom = parent.dom
+    dom.children.delete(node.dom)
+    idx = dom.children.index(anchor.dom)
+    dom.children.insert(idx || dom.children.size, node.dom)
+    node.dom.parent = dom
+  end
+
   def detach(node)
     return unless node.dom.parent
 
@@ -170,6 +179,13 @@ class StringViewParent < Citrine::Component
   end
 end
 
+# S1-4：children 插槽的宿主——children 落位在 slot-body 容器内
+class SlotChild < Citrine::Component
+  def view
+    box(css_class: "slot-body") { children }
+  end
+end
+
 # ── 测试 ────────────────────────────────────────────────────
 
 class NestingTest < Minitest::Test
@@ -283,12 +299,12 @@ end
     assert_match(/重复 key/, error.message)
   end
 
-  def test_props_change_rebuilds_keyed_child
+  # S1-2：props 变化 → 子组件实例与 state 原地保留，只有读该 prop 的块重跑
+  def test_props_change_keeps_keyed_child_instance
     parent = ListParent.new
     mount(parent)
-    before = NestedChild.mounts
 
-    # 同一 key、不同 props → S1 语义：重建（S2 会改为原地更新）
+    # 同一 key、props 变化 → S1-2 语义：原地更新（旧语义是重建、丢光子组件 state）
     klass = Class.new(Citrine::Component) do
       components NestedChild
       state :label_text, default: "a"
@@ -296,13 +312,16 @@ end
       def view = stack { nested_child(title: label_text, key: :one) }
     end
     widget = klass.new
-    mount(widget)
+    root = mount(widget)
+    child = component_roots(root).first.rendered_component
+    child.clicks = 2
     first_mounts = NestedChild.mounts
 
     widget.label_text = "b"
 
-    assert_equal first_mounts + 1, NestedChild.mounts, "props 变化时 keyed 子组件应重建"
-    assert_operator before, :<=, NestedChild.mounts
+    assert_equal first_mounts, NestedChild.mounts, "props 变化不再重建 keyed 子组件"
+    assert_equal 0, NestedChild.unmounts, "被保留的子组件不应走卸载"
+    assert_includes collect_texts(root), "b:2", "读 title 的块应重跑出新文案，且子组件 clicks 未被重置"
   end
 
   def test_element_keys_are_reused_too
@@ -418,9 +437,10 @@ end
     assert_includes collect_texts(root), "x"
   end
 
-  def test_nested_view_must_render_exactly_one_root
+  # S1-4：多根子组件按 fragment 处理——0 根仍然报错（纯文本请包 label）
+  def test_nested_view_with_zero_roots_raises
     error = assert_raises(RuntimeError) { mount(StringViewParent.new) }
-    assert_match(/恰好一个/, error.message)
+    assert_match(/至少一个/, error.message)
   end
 
   def test_render_outside_view_raises
@@ -432,17 +452,239 @@ end
     assert_match(/没有父节点/, error.message)
   end
 
-  def test_render_with_block_is_not_supported_yet
-    widget = Class.new(Citrine::Component) do
-      components ListRow
+  # ── S1-4：插槽 children —— render(Child) { … } 的块在子组件里落位 ──
+
+  def test_children_block_renders_inside_child_layout
+    parent = Class.new(Citrine::Component) do
+      components SlotChild
+
+      def view = stack { slot_child { label(css_class: "from-parent") { "父传内容" } } }
+    end.new
+    root = mount(parent)
+
+    assert_includes collect_texts(find_first(root, "slot-body")), "父传内容",
+                    "父传块的输出应出现在子组件布局内部"
+  end
+
+  def test_children_update_in_place_when_signal_changes
+    parent = Class.new(Citrine::Component) do
+      components SlotChild
+      state :word, default: "一"
+
+      def view = stack { slot_child { label(css_class: "from-parent") { word } } }
+    end.new
+    root = mount(parent)
+    before = find_all(root, "from-parent").map(&:dom)
+
+    parent.word = "二"
+
+    assert_equal before, find_all(root, "from-parent").map(&:dom),
+                 "children 由自己的块 Effect 驱动，原地更新、DOM 不换新"
+    assert_includes collect_texts(root), "二"
+  end
+
+  def test_children_block_disappears_when_no_longer_passed
+    parent = Class.new(Citrine::Component) do
+      components SlotChild
+      state :show, default: true
 
       def view
-        stack { list_row(code: "A") { label { "slot" } } }
+        stack do
+          if show
+            slot_child { label(css_class: "from-parent") { "内容" } }
+          else
+            slot_child
+          end
+        end
       end
     end.new
+    root = mount(parent)
+    assert_includes collect_texts(root), "内容"
 
-    error = assert_raises(ArgumentError) { mount(widget) }
-    assert_match(/插槽/, error.message)
+    parent.show = false
+
+    refute_includes collect_texts(root), "内容", "children 块消失应随 presence 翻转被移除"
+
+    parent.show = true
+
+    assert_includes collect_texts(root), "内容", "children 块复现应重新落位"
+  end
+
+  def test_multi_root_child_is_supported_as_fragment
+    unmounted = 0
+    child = Class.new(Citrine::Component) do
+      on_unmount -> { unmounted += 1 }
+
+      define_method(:view) do
+        stack(css_class: "root-a") { label { "A" } }
+        stack(css_class: "root-b") { label { "B" } }
+      end
+    end
+    parent = Class.new(Citrine::Component) do
+      components child => :multi
+
+      def view = stack { multi }
+    end.new
+    root = mount(parent)
+
+    assert_includes collect_texts(root), "A"
+    assert_includes collect_texts(root), "B", "多根子组件不再抛错，两根都应渲染"
+
+    Citrine.unmount(parent)
+
+    assert_equal 1, unmounted, "多根子组件卸载只跑一次 on_unmount"
+    assert_empty root.children, "两个根都应被 detach，宿主无残留"
+  end
+
+  def test_multi_root_child_renders_in_ssr
+    child = Class.new(Citrine::Component) do
+      define_method(:view) do
+        label { "A" }
+        label { "B" }
+      end
+    end
+    parent = Class.new(Citrine::Component) do
+      components child => :multi
+
+      def view = stack { multi }
+    end
+
+    assert_includes Citrine.render(parent.new), "<p>A</p><p>B</p>", "SSR 侧多根按 fragment 拼接"
+  end
+
+  def test_multi_root_child_view_reruns_and_disappears_roots
+    child = Class.new(Citrine::Component) do
+      state :n, default: 1
+
+      define_method(:view) do
+        stack(css_class: "root-a") { label { "A" } }
+        stack(css_class: "root-b") { label { "B" } } if n == 1
+      end
+    end
+    parent = Class.new(Citrine::Component) do
+      components child => :multi
+
+      def view = stack { multi }
+    end.new
+    root = mount(parent)
+    multi_child = component_roots(root).first.rendered_component
+    assert_includes collect_texts(root), "B"
+
+    multi_child.n = 2 # view 体读取（条件根）→ 子组件自己的 view Effect 重跑
+
+    assert_includes collect_texts(root), "A"
+    refute_includes collect_texts(root), "B", "消失的根应随重跑被卸载"
+    assert_equal 1, find_all(root, "root-a").size
+
+    multi_child.n = 1
+
+    assert_includes collect_texts(root), "B", "复出的根应重新渲染"
+  end
+
+  def test_child_view_body_read_reruns_view_effect_and_swaps_root
+    child = Class.new(Citrine::Component) do
+      state :expanded, default: false
+
+      define_method(:view) do
+        box(css_class: expanded ? "open" : "shut") { label { "x" } }
+      end
+    end
+    parent = Class.new(Citrine::Component) do
+      components child => :pane
+
+      def view = stack { pane }
+    end.new
+    root = mount(parent)
+    shut_box = find_first(root, "shut")
+    assert shut_box
+
+    component_roots(root).first.rendered_component.expanded = true
+
+    open_box = find_first(root, "open")
+    assert open_box, "view 体读取变化应经 view Effect 重跑出新根"
+    refute_same shut_box.dom, open_box.dom, "css_class 值类 prop 变化走元素重建（新节点）"
+    assert_nil find_all(root, "shut").first, "旧根应被卸载"
+  end
+
+  def test_view_rerun_keeps_sibling_order
+    child = Class.new(Citrine::Component) do
+      state :expanded, default: false
+
+      define_method(:view) do
+        box(css_class: expanded ? "open" : "shut") { label { "x" } }
+      end
+    end
+    parent = Class.new(Citrine::Component) do
+      components child => :pane
+
+      def view = stack { pane; label(css_class: "tail") { "尾" } }
+    end.new
+    root = mount(parent)
+    host = root.children.first.dom
+    tail = find_first(root, "tail").dom
+
+    component_roots(root).first.rendered_component.expanded = true
+
+    new_root_dom = find_first(root, "open").dom
+    assert_equal [new_root_dom, tail], host.children.last(2),
+                 "view 重跑换根后，新根应回到原渲染位（在后续兄弟之前）"
+  end
+
+  # ── S1-9：组件 ref —— 登记实例而非 prop ─────────────────────
+
+  def test_component_ref_registers_instance
+    parent = Class.new(Citrine::Component) do
+      components NestedChild
+
+      def view = stack { nested_child(title: "a", ref: :kid, key: :one) }
+    end.new
+    mount(parent)
+
+    kid = parent.refs[:kid]
+    assert_kind_of NestedChild, kid, "组件 ref 应登记子组件实例（元素 ref 才登记 DOM）"
+    assert_equal "a", kid.title
+  end
+
+  def test_component_ref_points_to_new_instance_after_swap
+    row = Class.new(Citrine::Component) do
+      prop :id
+
+      def view = box { label { id } }
+    end
+    other = Class.new(Citrine::Component) do
+      prop :id
+
+      def view = label { id }
+    end
+    parent = Class.new(Citrine::Component) do
+      state :tab, default: :row
+
+      define_method(:view) do
+        stack do
+          if tab == :row
+            render(row, id: "R", ref: :pane, key: "pane")
+          else
+            render(other, id: "O", ref: :pane, key: "pane")
+          end
+        end
+      end
+    end.new
+    mount(parent)
+
+    assert_instance_of row, parent.refs[:pane]
+
+    parent.tab = :other
+
+    assert_instance_of other, parent.refs[:pane], "子组件重建后 ref 应指向新实例"
+  end
+
+  def test_element_ref_still_registers_dom_handle
+    parent = Class.new(Citrine::Component) do
+      def view = stack { box(css_class: "target", ref: :el) }
+    end.new
+    root = mount(parent)
+
+    assert_same find_first(root, "target").dom, parent.refs[:el], "元素 ref 行为不变（平台句柄）"
   end
 
   def test_nested_window_key_is_registered_and_unregistered

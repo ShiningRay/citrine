@@ -10,12 +10,16 @@ module Citrine
   module Style
     module_function
 
-    # 有数值默认补 px 的属性（显式字符串单位不受影响）
+    # 有数值默认补 px 的属性（显式字符串单位不受影响）。
+    # font_size 等排版键在此的原因：CSS 里 `font-size:14` 是非法声明（浏览器整条丢弃），
+    # SSR 按值直拼会输出非法 CSS——数值必须推断成 "14px" 才与 DOM 侧一致。
     PX_PROPERTIES = %i[
       width height min_width min_height max_width max_height
       border_radius top left right bottom inset
       padding padding_left padding_right padding_top padding_bottom
       margin margin_left margin_right margin_top margin_bottom
+      font_size letter_spacing word_spacing text_indent
+      gap row_gap column_gap outline_width outline_offset
     ].freeze
 
     # 数值语义上无单位的属性

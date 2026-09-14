@@ -9,6 +9,8 @@ module Citrine
     attr_accessor :dom, :text
     # 上一次应用过的内联样式键：响应式 style 变化时用来清掉已消失的键
     attr_accessor :applied_style_keys
+    # 上一次应用过的透传属性键（S2-2）：值翻 false/nil 时用来清掉旧属性
+    attr_accessor :applied_attrs
     # keyed 复用的身份：显式 key + 身份标签（元素类型）+ 组件根身份（若它是某子组件的根）
     attr_accessor :reuse_key, :identity, :component_identity, :component_props
     # 组件边界节点：由 `render(Child)` 产生，承载子组件 view 的输出。

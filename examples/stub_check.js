@@ -1,8 +1,8 @@
 // stub_check.js — Node DOM 桩验收 M1 示例（不起浏览器）
 // 用法: node stub_check.js counter | todo | reactive_props | keyed_list
 const which = process.argv[2];
-if (!["counter", "todo", "reactive_props", "keyed_list"].includes(which)) {
-  console.error("用法: node stub_check.js counter|todo|reactive_props|keyed_list");
+if (!["counter", "todo", "reactive_props", "keyed_list", "props_widgets"].includes(which)) {
+  console.error("用法: node stub_check.js counter|todo|reactive_props|keyed_list|props_widgets");
   process.exit(2);
 }
 
@@ -14,6 +14,10 @@ function makeEl(tag) {
     children: [],
     parentElement: null,
     _listeners: {},
+    _attrs: {},
+    setAttribute(name, value) { this._attrs[name] = String(value); },
+    removeAttribute(name) { delete this._attrs[name]; },
+    getAttribute(name) { return Object.prototype.hasOwnProperty.call(this._attrs, name) ? this._attrs[name] : null; },
 appendChild(c) {
   // 真实 DOM 的 appendChild 是"移动"：已在别处的节点先摘下来，已在同一父下的也移到末尾
   if (c.parentElement && c.parentElement !== this) c.parentElement.removeChild(c);
@@ -22,6 +26,15 @@ appendChild(c) {
   this.children.push(c);
   return c;
 },
+    // S1-2：信号驱动的 view 重跑把节点挪回原渲染位时用到
+    insertBefore(c, ref) {
+      if (!ref) return this.appendChild(c);
+      if (c.parentElement && c.parentElement !== this) c.parentElement.removeChild(c);
+      this.children = this.children.filter((x) => x !== c);
+      this.children.splice(this.children.indexOf(ref), 0, c);
+      c.parentElement = this;
+      return c;
+    },
     removeChild(c) { c.parentElement = null; this.children = this.children.filter((x) => x !== c); },
     addEventListener(ev, fn) { (this._listeners[ev] = this._listeners[ev] || []).push(fn); },
     fire(ev, event) { (this._listeners[ev] || []).forEach((fn) => fn(event || {})); },
@@ -203,6 +216,31 @@ if (which === "counter") {
   input.fire("input");
   input.fire("keydown", { key: "Enter" });
   assert("空白输入不添加", summary(), "待办 · 剩余 0 / 1");
+} else if (which === "props_widgets") {
+  // S2-2：属性透传——id / disabled / aria-* / data-* 出现在真实 DOM 上
+  const submitBtn = () => findButton(app, "提交");
+  assert("透传 id", submitBtn().getAttribute("id"), "ok-btn");
+  assert("aria_label → aria-label", submitBtn().getAttribute("aria-label"), "提交");
+  assert("data_role → data-role", submitBtn().getAttribute("data-role"), "primary");
+  assert("disabled: true 输出空值属性", submitBtn().getAttribute("disabled"), "");
+
+  // S2-4：受控 check_box —— change 写回 Signal（先写回再派发）；
+  // disabled: !agreed 是值类 prop，变化走元素重建路径（v1 语义），重新查节点
+  const agree = findAll(app, "input").find((i) => i.getAttribute("id") === "agree");
+  agree.checked = true;
+  agree.fire("change");
+
+  assert("勾选写回 Signal（disabled 消失）", submitBtn().getAttribute("disabled"), null);
+  assert("取消勾选后 disabled 恢复", (agree.checked = false, agree.fire("change"), submitBtn().getAttribute("disabled")), "");
+
+  // S2-4：IME —— 组合过程的 Enter 不触发 on_enter
+  const draftInput = () => findAll(app, "input").find((i) => i.getAttribute("id") === "draft");
+  draftInput().value = "未上屏的候选";
+  draftInput().fire("input");
+  draftInput().fire("keydown", { key: "Enter", isComposing: true });
+  assert("IME 组合期 Enter 不清空草稿", draftInput().value, "未上屏的候选");
+  draftInput().fire("keydown", { key: "Enter" });
+  assert("普通 Enter 触发 on_enter 清空", draftInput().value, "");
 }
 
 console.log(failures === 0 ? "\n全部通过 ✅" : `\n${failures} 项失败 ❌`);
