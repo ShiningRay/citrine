@@ -307,6 +307,37 @@ box(
 - 平台边界：DOM 幂等重设属性（事件绑定拆到 `bind_events`，避免重复挂监听）；SSR 只求值一次；
   Canvas 在绘制时求值。响应式 `style` 换掉整份内联样式，消失的键会被显式清空（错误态高亮必须能消失）
 
+### 生命周期与键盘（G-9 / G-10，2026-09-14 增补）
+
+v1 不做组件嵌套（F5），但"组件自己管资源"仍缺了三样，键盘优先的应用尤其吃亏：
+
+```ruby
+class Editor < Citrine::Component
+  window_key :navigate                 # 全局快捷键（window 级 keydown），随卸载自动解绑
+  on_mount :focus_editor               # DOM 就位后执行
+  on_unmount { stop_flash_timer }       # 卸载时清理
+
+  def view
+    stack do
+      text_input(value: signal(:draft), ref: :editor,
+                 on_key: { "Escape" => :cancel, else: :type },
+                 on_focus: :begin_edit, on_blur: :commit)
+    end
+  end
+
+  def focus_editor = refs[:editor]&.focus
+end
+```
+
+- **钩子继承**：`on_mount` / `on_unmount` / `window_key` / 三宏（prop/state/computed）都按
+  "子类 dup 父类声明" 继承——顺带修掉了"子类丢失父类三宏定义"这个隐性缺陷
+- **键盘事件归一**：处理器收到 `Citrine::KeyEvent`（`key` / 修饰键谓词 / `command?` /
+  `prevent_default` / `raw`），组件代码不直接碰 JS 事件，CRuby 里也能单测
+- **卸载路径**：`Citrine.unmount(component)` → 销毁整棵子树的 Effect、解绑全局键盘、
+  跑 `on_unmount`、清空 `refs`；root 自身留着（它就是页面上的挂载容器）
+- 元素级 `on_key` / `on_focus` / `on_blur` 由 DOM 渲染器绑定在 `bind_events`（只挂一次，
+  不参与响应式属性重跑）
+
 ### 命名约定（决策 #10，2026-09-14 补充）
 
 DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
@@ -408,6 +439,7 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 | 2026-09-14 | **响应式属性（G-2）落地**：props 的值传 Proc 即声明"响应式属性"，在该节点自己的 Effect 内求值（白名单 `css_class`/`placeholder`/`style`/`direction`/`gap`）；DOM 侧 `apply_props` 改为幂等、事件绑定拆到新钩子 `bind_events`，重跑只重设属性、不重建子树；消失的内联样式键显式清空；SSR 只求值一次，Canvas 绘制时求值。新增示例 `reactive_props` + 12 项桩断言（含"兄弟/目标 DOM 未被重建"） | 第二辑 FRICTION（电子表格 dogfooding）的 P0：props 求值位置决定订阅范围，一处看不见的 5~10 倍重绘；Roadmap P0-1 的"props 响应式传播"由此先行落地，嵌套/keyed 复用仍待做 |
 
 | 2026-09-14 | **布局方向：语法糖 + 开发期提醒（G-8）**：新增 `stack { }`（竖排）/ `row { }`（横排）语法糖（再传 `direction` 直接报错）；新增 `Citrine.dev_mode`，`bin/citrine dev` 由 dev_server 注入 `window.CITRINE_DEV` 自动置位，开发模式下对"未声明方向且有多子节点"的 `box` 在每次挂载后汇总提醒一次。示例改用 `stack`/`row` | 两类 dogfooding 应用各栽一次同一坑（面板/网格塌成一条），且**桩里没有布局引擎、测不出**——说明这不是"注意点"而是默认值的表达能力问题；不改默认值以免破坏性变更，1.0 再评估 |
+| 2026-09-14 | **生命周期 + 键盘（G-9 / G-10）**：类宏 `on_mount`/`on_unmount`（含继承）+ `ref:` 句柄 + `Citrine.unmount(component)`；元素级 `on_key`/`on_focus`/`on_blur` 与类宏 `window_key`（window 级，随卸载解绑），键盘事件归一为平台无关的 `Citrine::KeyEvent`（路由 `Component#handle_key` 支持 Symbol/Proc/哈希查表）。顺带修复：三宏定义（prop/state/computed）现在会被子类继承。新增 test/component_test.rb（12 项）+ 桩 9 项断言（含"卸载后 window 监听解绑"） | 键盘优先应用此前只能全量外挂 `window.addEventListener`（电子表格 60 行 glue），且没有卸载路径——定时器/监听器无法回收；这两件事共用同一条生命周期，因此合并落地 |
 
 ## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
 
