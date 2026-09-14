@@ -8,7 +8,7 @@
 #   - 监听 lib/ 与目录下 .rb 变更，经 SSE 通知浏览器整页刷新
 #   - 编译失败时返回错误浮层脚本（页面不再白屏）
 #
-# 用法：bin/citrine dev [目录] [-p 端口]
+# 用法：bin/citrine dev [目录] [-p 端口] [-I 加载路径]
 require "socket"
 require "open3"
 require "json"
@@ -49,15 +49,26 @@ module Citrine
       })();
     JS
 
-    def self.run!(args)
+    # 命令行解析（纯函数，便于单测）：返回 [目录, 端口, 额外加载路径]
+    def self.parse_args(args)
       dir = nil
       port = 4402
+      extra_libs = []
       i = 0
       while i < args.length
         arg = args[i]
         if arg == "-p"
           port = args[i + 1].to_i
           i += 2
+        elsif arg == "-I"
+          value = args[i + 1]
+          raise ArgumentError, "-I 需要一个加载路径参数（如 -I ../some-lib/lib）" if value.nil? || value.start_with?("-")
+
+          extra_libs << value
+          i += 2
+        elsif arg.start_with?("-I")
+          extra_libs << arg[2..]
+          i += 1
         elsif arg !~ /\A-/
           dir = arg
           i += 1
@@ -65,12 +76,20 @@ module Citrine
           i += 1
         end
       end
-      new(dir || "examples", port).start
+      [dir || "examples", port, extra_libs]
     end
 
-    def initialize(dir, port)
+    def self.run!(args)
+      dir, port, extra_libs = parse_args(args)
+      new(dir, port, extra_libs).start
+    end
+
+    def initialize(dir, port, extra_libs = [])
       @dir = File.expand_path(dir)
       @root = File.expand_path("../..", __dir__) # 项目根（dev_server.rb 位于 lib/citrine/）
+      # 额外加载路径（-I 可重复）：跨仓库示例（如组件库的 examples/）编译时
+      # 需要补上那个仓库的 lib；转绝对路径——编译 cwd 是源文件所在目录
+      @extra_libs = extra_libs.map { |p| File.expand_path(p) }
       @port = port
       @clients = [] # 每个 SSE 连接一个 Queue
       @cache = {}   # js 路径 => { key:, body: }
@@ -186,9 +205,9 @@ module Citrine
 
       tmp = File.join(Dir.tmpdir, "rv_dev_#{Process.pid}_#{rand(1_000_000)}.js")
       # 与手工编译完全一致的形态：cwd = 源文件所在目录，-I附着式传参
+      includes = ["-I#{File.join(@root, 'lib')}", "-I."] + @extra_libs.map { |p| "-I#{p}" }
       out, err, status = Open3.capture3(
-        "opal", "-c",
-        "-I#{File.join(@root, 'lib')}", "-I.",
+        "opal", "-c", *includes,
         "-o", tmp, File.basename(rb_full),
         chdir: File.dirname(rb_full)
       )

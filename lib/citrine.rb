@@ -40,11 +40,36 @@ module Citrine
       require_relative "citrine/string_renderer"
       StringRenderer.render(component)
     end
+
+    # 造一个新信号。模块级工厂，哪儿都能用（领域模型 / 测试 / 组件外）：
+    #
+    #   tick = Citrine.signal(0)
+    #   rows = Citrine.signal { load_rows }   # 块 = 惰性初值，第一次读取时求值一次
+    #
+    # 存在的理由是"不让人写出裸的 `Signal`"——stdlib 与 Opal corelib 都有
+    # `::Signal`（进程信号），裸写会拿到那个类，报错完全不指向真因（FRICTION F14）。
+    # 普通类里想少打字可以 `include Citrine::Reactive`，得到同名实例方法。
+    def signal(value = nil, &init)
+      Signal.new(value, &init)
+    end
+
+    # 造一个响应式集合（D）：集合自身的每次变更都是一次通知，写法保持集合的样子。
+    #
+    #   rows = Citrine.signal_list([])
+    #   rows << row
+    #   rows.delete_at(0)
+    #
+    # get 返回**冻结**快照：`rows.get << x` 会当场 FrozenError，而不是静默不触发。
+    def signal_list(items = [])
+      ListSignal.new(items)
+    end
   end
 end
 
 require_relative "citrine/version"
 require_relative "citrine/signal"
+require_relative "citrine/list_signal"
+require_relative "citrine/reactive"
 require_relative "citrine/key_event"
 require_relative "citrine/num"
 require_relative "citrine/node"
