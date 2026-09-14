@@ -12,16 +12,20 @@ for f in counter.html todo.html counter.js todo.js; do
   if [ -f "examples/$f" ]; then
     cp "examples/$f" "$OUT/"
   else
-    # 源码存在而产物未编译时现场编译（与手工命令同形态）
+    # 源码存在而产物未编译时现场编译（bundler 环境用 bundle exec 解析 opal）
     base="${f%.js}"
-    [ -f "examples/$base.rb" ] && (cd examples && opal -c -I../lib -I. -o "../$OUT/$f" "$base.rb")
+    if [ -f "examples/$base.rb" ]; then
+      (cd examples && bundle exec opal -c -I../lib -I. -o "../$OUT/$f" "$base.rb") \
+        || (cd examples && opal -c -I../lib -I. -o "../$OUT/$f" "$base.rb")
+    fi
   fi
 done
 cp examples/counter.html "$OUT/counter.html"
 cp examples/todo.html "$OUT/todo.html"
 
 echo "[site] 编译官网徽章组件…"
-(cd website && opal -c -I../lib -I. -o dist/website.js website.rb)
+(cd website && (bundle exec opal -c -I../lib -I. -o dist/website.js website.rb) \
+  || (opal -c -I../lib -I. -o dist/website.js website.rb))
 
 echo "[site] 拷贝落地页…"
 cp website/index.html "$OUT/"
