@@ -196,6 +196,23 @@ module Citrine
       @signals ||= {}
     end
 
+    # 按 key 取用的信号表（组件内）：同一个 (name, key) 只会建一个信号，
+    # 用于"每行 / 每格 / 每个标的都有自己的信号"这类场景，替代到处手写
+    # `@xxx[key] ||= Citrine::Signal.new(...)`：
+    #
+    #   def view_signal(row, col) = keyed_signal(:view, [row, col]) { { selected: false } }
+    #
+    # 初值函数在**本组件实例**上求值（可以读 state / 调用自己的方法）；给块则在该 key
+    # 第一次被取用时求值一次。表按 name 分开，互不干扰。
+    def keyed_signal(name, key, &init)
+      table = (keyed_signals[name] ||= {})
+      table[key] ||= Signal.new(init ? instance_eval(&init) : nil)
+    end
+
+    def keyed_signals
+      @keyed_signals ||= {}
+    end
+
     # 父组件重传 props（嵌套复用时的就地更新，P0-1/S1）：
     # 校验口径与 initialize 完全一致（未声明 prop / 类型不符都当场报错）。
     # 子组件侧的读法不变（prop :x 仍是只读），S2 会把它们升级成信号以获得细粒度更新。

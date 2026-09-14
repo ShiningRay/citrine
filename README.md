@@ -95,6 +95,7 @@ v1 已知限制：列表为块级整体重建（无 keyed 复用）；集合为�
 ├── lib/
 │   ├── citrine.rb        # 入口：装配 + Citrine.mount / Citrine.unmount / Citrine.render
 │   ├── citrine/signal.rb # Signal / Effect（平台无关，CRuby 可测）
+│   ├── citrine/reactive.rb # 给普通类的小混入：include 后可用 signal(...)
 │   ├── citrine/num.rb    # 跨平台数值工具（idiv / round_to / integral? / finite? …）
 │   ├── citrine/key_event.rb # 键盘事件（平台无关视图；G-9）
 │   ├── citrine/node.rb   # 元素树节点（平台无关）
@@ -178,8 +179,10 @@ ruby -run -e httpd . -p 4401
    （JS `Math.round` 朝 +∞；上游修复见 opal/opal#2808）。要跨平台一致请用
    `Citrine::Num.round_to(value, digits)`——它先取绝对值再贴符号。
 3. **`Signal` 名字遮蔽**：Ruby/Opal 标准库里另有 `::Signal`（进程信号类）。在组件里写裸
-   `Signal.new(...)` 会拿到那个空类并报 `undefined method 'get'`——请始终写全限定名
-   `Citrine::Signal`，或使用 `state` 宏。
+   `Signal.new(...)` 会拿到那个空类并报 `undefined method 'get'`——**不要写出裸名字**：
+   组件内用 `state` 宏、组件外（领域模型/测试）用 `Citrine.signal(...)`，或给普通类
+   `include Citrine::Reactive` 后直接写 `signal(...)`；组件内要"按 key 记忆的信号表"用
+   `keyed_signal(:name, key) { 初值 }`。确实要拿类本身时写全限定名 `Citrine::Signal`。
 4. **可变字符串方法不存在**：`String#<<` / `#gsub!` / `#[]=` 在 Opal 下抛
    `NotImplementedError`（上游明文记录的设计选择：字符串不可变）。累积字符串用
    `buffer = buffer + ch` 或数组 `join`。
@@ -207,6 +210,13 @@ ruby -run -e httpd . -p 4401
 
 ### 框架备忘
 
+- **创建信号（A/B/C 三个入口）**：组件内首选 `state` / `computed`；组件外与"按 key 记忆"场景：
+  - `Citrine.signal(0)` / `Citrine.signal { 惰性初值 }` —— 到处可用（领域模型、测试），
+    且**不必写出裸的 `Signal`**（会撞 stdlib 的 `::Signal`，见陷阱 3）
+  - `include Citrine::Reactive` → 普通类里直接 `signal(0)`（组件不要 include：组件已有
+    同名的 `signal(name)`，语义是"取已声明 state 的底层信号"）
+  - `keyed_signal(:view, [row, col]) { { selected: false } }` —— 组件内按 (name, key) 记忆的
+    信号表，替代到处手写 `@xxx[key] ||= Citrine::Signal.new(...)`；初值块在本组件实例上求值
 - **键盘：元素级 + 全局（G-9）**：元素上写 `on_key:`——Symbol/Proc 直接收事件，哈希形式按 key 查表
   （`on_key: { "Escape" => :clear_draft, else: :fallback }`）；焦点相关用 `on_focus:` / `on_blur:`。
   键盘优先应用要的全局快捷键用类宏 `window_key :handler` 声明（window 级 keydown，

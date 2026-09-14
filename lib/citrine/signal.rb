@@ -6,24 +6,33 @@ module Citrine
   # 唯一读写通道是 #get / #set——绕过它们（如直接改内部数组）不会触发更新，
   # v1 集合为整体替换语义。
   class Signal
-    def initialize(value = nil)
+    # 可以给块：块即**惰性初值**，第一次 get 时才求值（只求一次）。
+    # 与 state 宏里 `init:` 的区别：这里块在**定义处**的词法作用域执行（普通 Proc 语义），
+    # 组件的 `state ... do ... end` 则在组件实例上求值。
+    def initialize(value = nil, &init)
       @value = value
+      @init = init
       @subs = []
     end
 
     def get
       effect = Effect.current
       effect&.depend(self)
+      run_init if @init
       @value
     end
 
     def set(new_value)
+      @init = nil # 显式写入过就不再是"未初始化"
       return self if new_value == @value
 
       @value = new_value
       @subs.dup.each(&:run)
       self
     end
+
+    # 惰性初值是否还没求过（诊断用）
+    def lazy? = !@init.nil?
 
     # 以下两个方法供 Effect 内部使用
 
@@ -33,6 +42,14 @@ module Citrine
 
     def unsubscribe(effect)
       @subs.delete(effect)
+    end
+
+    private
+
+    def run_init
+      init = @init
+      @init = nil
+      @value = init.call
     end
   end
 
