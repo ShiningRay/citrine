@@ -27,9 +27,12 @@
     生产断言 `621c44c`：rake prod_check 断言不 require citrine/debug 的产物不含埋点字符串；
     还原工具 `dcc8e3d`：Citrine::SourceMap 兼容 indexed map，端到端测试验证 Node 抛错栈位置
     可还原到 .rb 第 3 行）。剩余：Sentry 真实上报接入（需 Sentry 账号与 DSN）、Cytoscape UI。
-  - **T-B4 待产品决策**（计划 D6 明确"产品先决定是否跨平台"，已向用户提出 macOS-only / Tauri v2 /
-    Capacitor v8 选择，等待决策）：维持 macOS .app 打包现状；
-    签名/公证验收（codesign --verify / spctl -a）需 Apple 开发者证书。
+  - **T-B4 部分验收已执行**（macOS-only 现状延伸）：本机打包 CitrineCounter.app 后以
+    ad-hoc 签名（codesign --force --deep --sign -）完成 `codesign --verify --deep --strict` ✓
+    （已接入 CI package job）；`spctl -a` 对 ad-hoc 产物为 rejected——Gatekeeper 正式分发
+    需 Developer ID 证书签名 + 公证（外部资源）。壳选型（macOS-only / Tauri v2 / Capacitor v8）
+    仍待产品决策；其余剩余：Sentry 真实上报接入与 Cytoscape UI（需外部账号/资源）、
+    T-B2 IME 真机人工验收（步骤已写入上文）。
   - 验证基线：`bundle exec rake` 232 项 / 738 断言全绿；`rake stubs` 七套全绿；`rake parity`、
     `rake size`、`rake map_check`、`rake browser`、`rake canvas_parity`、`rake prod_check`、
     `rake lint` 全绿。

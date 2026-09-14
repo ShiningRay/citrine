@@ -93,3 +93,7 @@ jobs:
           bundler-cache: true
       - name: 打包 CitrineCounter.app
         run: bundle exec bin/citrine package counter
+      - name: ad-hoc 签名 + codesign 验收（T-B4 部分；spctl 正式分发需 Developer ID 证书）
+        run: |
+          codesign --force --deep --sign - build/CitrineCounter.app
+          codesign --verify --deep --strict build/CitrineCounter.app
