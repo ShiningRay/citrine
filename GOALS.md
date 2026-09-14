@@ -91,8 +91,10 @@ WebSocket 推给 webview 显示。
 
 1. **控制流**：✅ v1 以"块级重建"语义覆盖——分支/列表所在 block 重跑
    即重建子树，无需 Solid 式控制流组件；性能优化（keyed 复用）留给 M2+。
-2. **响应式集合**：✅ v1 按计划采用整体替换语义（`self.items = ...`）；
-   响应式集合包装留给后续里程碑。
+2. **响应式集合**：✅ 已落地 `Citrine.signal_list([...])`（citrine PR #21）——集合 API
+   （`<<` / `delete_at` / `replace` …）每次变更即一次通知，内部仍走 `Signal#set` 这条唯一
+   触发路径；`get` 返回冻结快照，把"就地改数组静默不更新"变成当场报错。
+   （v1 原本的整体替换语义 `self.items = ...` 仍然有效。）
 
 ### M2 — 开发体验
 
@@ -461,6 +463,7 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 | 2026-09-14 | **Ruby 4.0 纳入 CI**：`test` 作业矩阵由 3.1–3.4 扩到 **3.1–4.0**（新增 `Ruby 4.0` 检查，既有检查名不动——分支保护按检查名精确匹配，改名会卡住合并）；每条矩阵腿加跑 `rake parity`，顺带验证"该 Ruby 版本能跑 Opal 编译、产物在 Node 下数值一致"。本地 Ruby 4.0.6 实测全绿：单测 54 项 / 187 断言、5 套 Node 桩、parity 34 行逐字节一致，`bundle install` 解析 opal 1.8.3 + minitest 5.27 无障碍 | 平台无关核心本来就不依赖 Opal、CRuby 直测，扩矩阵成本极低而覆盖真实用户环境（Ruby 4.0 是 3.5 改名后的首个版本）；`stubs` / `package` 作业仍钉 3.3——它们验证的是 Opal 编译链路与 macOS 壳，与 CRuby 版本正交，已在 4.0.6 手工验证过一遍 |
 | 2026-09-14 | **`citrine dev` 支持 `-I` 额外加载路径**：可重复传 `-I 路径`（`-I路径` 附着式也认），构造时转绝对路径再交给 Opal——跨仓库示例（如组件库自带的 `examples/`）编译时需要补上那个仓库的 lib；`-I` 缺值时报清晰错误而不是崩在 `File.expand_path`。参数解析抽成 `DevServer.parse_args` 纯函数，新增 test/dev_server_test.rb（8 项），dev 工具首次进入 CI 覆盖 | 编译 cwd 是源文件所在目录，相对路径会解析错位，所以统一转绝对路径；dev 工具此前完全没有单测，抽纯函数是最小代价的可测化 |
 | 2026-09-14 | **信号创建三入口（A/B/C）**：① `Citrine.signal(v)` / `Citrine.signal { 惰性初值 }`（模块级工厂，到处可用）；② `include Citrine::Reactive` 让普通类直接写 `signal(v)`；③ `Component#keyed_signal(name, key) { 初值 }` 按 key 记忆的信号表，替代手写 `@x[key] ||= …`。`Signal` 支持块形式的惰性初值（首次读取求值一次；显式 `set` 后不再求值），新增 test/signal_ergonomics_test.rb（10 项），README 陷阱 3 改写为"**不要写出裸的 `Signal`**"并列出三个入口 | 两个 dogfooding demo 里 `Citrine::Signal.new(...)` 出现 10+ 处；更要紧的是 F14 记录过"裸写 `Signal` 会撞 stdlib/Opal corelib 的 `::Signal`，报错完全不指向真因"。工厂 + 混入把"冗长"和"静默撞名"一起消掉；`keyed_signal` 对应 demo 已提出的 `signal_for` / `dynamic_state` 诉求（选更说明意图的名字） |
+| 2026-09-14 | **响应式集合（D）**：`Citrine.signal_list([...])` / 混入后的 `signal_list([...])` → `Citrine::ListSignal`（`Signal` 子类）。集合 API `<<` / `push` / `unshift` / `insert` / `pop` / `shift` / `delete` / `delete_at` / `clear` / `replace` / `[]=` / `sort!` … 每次变更内部换一份**新数组**再通知，触发路径仍只有 `Signal#set` 一条；**`get` 返回冻结快照**（`rows.get << x` 当场 `FrozenError`，而不是静默不触发）；读操作（`size` / `each` / `map` / `include?` / `[]` …）在块内读会建立依赖。新增 test/list_signal_test.rb（13 项），并在 Opal/Node 侧实测一致（`frozen=true`、`FrozenError`） | 两个 demo 的集合代码是"维护普通数组 + 在改动末尾补一句 `@x_signal.set(@x.dup)`"——两个真相源，漏一处就静默不更新（v1 只有整体替换一条触发路径逼出来的）。D 让"改集合"本身成为触发点，同时把最阴的坑（就地改数组静默无效）升级为当场报错；深响应（元素内部改动）仍不做，与 v1 边界一致 |
 
 ## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
 

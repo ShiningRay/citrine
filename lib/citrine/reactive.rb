@@ -31,5 +31,10 @@ module Citrine
     def signal(value = nil, &init)
       Signal.new(value, &init)
     end
+
+    # 造一个响应式集合（ListSignal）：集合自身的每次变更都是一次通知
+    def signal_list(items = [])
+      ListSignal.new(items)
+    end
   end
 end

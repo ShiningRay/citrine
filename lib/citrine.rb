@@ -52,11 +52,23 @@ module Citrine
     def signal(value = nil, &init)
       Signal.new(value, &init)
     end
+
+    # 造一个响应式集合（D）：集合自身的每次变更都是一次通知，写法保持集合的样子。
+    #
+    #   rows = Citrine.signal_list([])
+    #   rows << row
+    #   rows.delete_at(0)
+    #
+    # get 返回**冻结**快照：`rows.get << x` 会当场 FrozenError，而不是静默不触发。
+    def signal_list(items = [])
+      ListSignal.new(items)
+    end
   end
 end
 
 require_relative "citrine/version"
 require_relative "citrine/signal"
+require_relative "citrine/list_signal"
 require_relative "citrine/reactive"
 require_relative "citrine/key_event"
 require_relative "citrine/num"

@@ -60,9 +60,10 @@ build/CitrineCounter.app/Contents/MacOS/CitrineCounter --dev http://localhost:44
 （`counter.html` / `todo.html`）、CRuby SSR（`ssr_demo.rb`）、浏览器 Canvas
 （`canvas_counter.html` / `canvas_todo.html`）。
 
-v1 已知限制：列表为块级整体重建（无 keyed 复用）；集合为整体替换语义
-（`self.items = ...`）；组件 props 为创建时快照；SSR 为一次性渲染且不序列化
-事件；Canvas 输入用 window.prompt（演示级）、布局为线性 stack/flow。
+v1 已知限制：组件 props 为创建时快照；SSR 为一次性渲染且不序列化事件；
+Canvas 输入用 window.prompt（演示级）、布局为线性 stack/flow。
+列表已有 keyed 复用（`key:` 命中即复用节点与实例）；集合用 `Citrine.signal_list([...])`
+（集合自身的每次变更都是一次通知，`get` 返回冻结快照）。
 
 M1 落地的 API（决策 #3 定案形态）：
 
@@ -85,8 +86,8 @@ class Counter < Citrine::Component
 end
 ```
 
-v1 已知限制：列表为块级整体重建（无 keyed 复用）；集合为整体替换语义
-（`self.items = ...`）；组件 props 为创建时快照。
+v1 已知限制：组件 props 为创建时快照（S2 会信号化）。列表 keyed 复用与
+`Citrine.signal_list` 集合 API 均已落地。
 
 ## 目录
 
@@ -210,13 +211,17 @@ ruby -run -e httpd . -p 4401
 
 ### 框架备忘
 
-- **创建信号（A/B/C 三个入口）**：组件内首选 `state` / `computed`；组件外与"按 key 记忆"场景：
+- **创建信号（A/B/C/D 四个入口）**：组件内首选 `state` / `computed`；组件外与"按 key 记忆"场景：
   - `Citrine.signal(0)` / `Citrine.signal { 惰性初值 }` —— 到处可用（领域模型、测试），
     且**不必写出裸的 `Signal`**（会撞 stdlib 的 `::Signal`，见陷阱 3）
   - `include Citrine::Reactive` → 普通类里直接 `signal(0)`（组件不要 include：组件已有
     同名的 `signal(name)`，语义是"取已声明 state 的底层信号"）
   - `keyed_signal(:view, [row, col]) { { selected: false } }` —— 组件内按 (name, key) 记忆的
     信号表，替代到处手写 `@xxx[key] ||= Citrine::Signal.new(...)`；初值块在本组件实例上求值
+  - `Citrine.signal_list([...])`（混入后 `signal_list([...])`）—— **响应式集合**：`<<` / `push` /
+    `delete_at` / `replace` / `sort!` … 每次变更即一次通知（内部换新数组，触发路径仍只有
+    `Signal#set` 一条）；`get` 返回**冻结**快照，`rows.get << x` 会当场 `FrozenError`
+    而不是静默不更新；读操作（`size` / `each` / `map` / `include?` …）在块内读会建立依赖
 - **键盘：元素级 + 全局（G-9）**：元素上写 `on_key:`——Symbol/Proc 直接收事件，哈希形式按 key 查表
   （`on_key: { "Escape" => :clear_draft, else: :fallback }`）；焦点相关用 `on_focus:` / `on_blur:`。
   键盘优先应用要的全局快捷键用类宏 `window_key :handler` 声明（window 级 keydown，
