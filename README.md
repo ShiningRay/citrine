@@ -158,6 +158,18 @@ ruby -run -e httpd . -p 4401
 
 ## 技术备忘
 
+### ⚠️ 跨平台语义陷阱（CRuby 单测全绿 ≠ 浏览器正确，务必先读）
+
+1. **整数除法返回浮点**：`7 / 2` 在 CRuby 是 `3`，Opal 下是 `3.5`。金额/数量计算请显式
+   取整（`(a / b).to_i`）或自建 `idiv` 工具方法——否则格式化输出会出现 `1,234,567,.89` 乱码。
+2. **负数取整方向不同**：`(-1.5).round` CRuby 为 `-2`，Opal 为 `-1`（JS `Math.round` 朝 +∞）。
+   需要对称取整时先取绝对值、取整后再贴符号。
+3. **`Signal` 名字遮蔽**：Ruby/Opal 标准库里另有 `::Signal`（进程信号类）。在组件里写裸
+   `Signal.new(...)` 会拿到那个空类并报 `undefined method 'get'`——请始终写全限定名
+   `Citrine::Signal`，或使用 `state` 宏。
+
+### 框架备忘
+
 - Opal 1.8.3：backtick 内嵌 JS 需要 `# backtick_javascript: true` magic comment
 - `Native` / `to_n` 需要 `require "native"`（Opal stdlib）；Ruby String 可直接传给 JS 函数
 - 带参数的方法调用接 `{}` block 必须写括号：`computed(:x) { ... }`（否则被解析为 Hash）

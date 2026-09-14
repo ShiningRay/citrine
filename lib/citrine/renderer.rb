@@ -32,10 +32,16 @@ module Citrine
 
     # DSL 挂载入口（Component#emit 调用）：把 node 挂到当前父节点下
     def mount(node)
+      parent = @parents.last
+      unless parent
+        raise "Citrine: 元素挂载时没有父节点。组件 view 只能在渲染器挂载过程中执行；" \
+              "一页多根请分别用各渲染器实例（DomRenderer.new + mount_component），不要多次 mount_at"
+      end
+
       node.dom = create_dom(node)
       apply_props(node)
-      @parents.last.children << node
-      attach(node, @parents.last)
+      parent.children << node
+      attach(node, parent)
       setup_widget(node)
       if node.block
         if reactive?
@@ -68,10 +74,25 @@ module Citrine
       node.children.clear
       @parents.push(node)
       result = yield
-      set_text(node, result) if result.is_a?(String) && node.children.empty?
+      if !result.nil? && node.children.empty?
+        warn_nonstring(node, result) unless result.is_a?(String)
+        set_text(node, result)
+      end
       result
     ensure
       @parents.pop
+    end
+
+    # F16：block 返回非字符串时按 to_s 渲染而非静默置空；每类只提醒一次
+    def warn_nonstring(node, result)
+      @warned_types ||= {}
+      type = result.class
+      return if @warned_types[type]
+      return unless respond_to?(:warn, true)
+
+      @warned_types[type] = true
+      warn "[citrine] #{node.type} 的内容 block 返回了 #{type}（#{result.inspect}），" \
+           "已按 to_s 渲染。建议写成插值：label { \"#{'{...}'}\" }"
     end
 
     def dispose(node)

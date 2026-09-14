@@ -62,16 +62,23 @@ module Citrine
     end
 
     def run
+      return self if @deps.nil? # 已 dispose 的 effect 保持惰性（广播快照中可能仍被迭代到）
+
       release_deps
       self.class.stack.push(self)
-      @block.call
+      begin
+        @block.call
+      ensure
+        self.class.stack.pop
+      end
       self
-    ensure
-      self.class.stack.pop
     end
 
-    # 永久停用：从所有依赖中移除，block 不再执行（节点销毁时由渲染器调用）
+    # 永久停用：从所有依赖中移除，block 不再执行（节点销毁时由渲染器调用）。
+    # 幂等：同一 effect 可能被销毁两次（自身重跑中 dispose 兄弟节点后又被快照迭代）。
     def dispose
+      return if @deps.nil?
+
       release_deps
       @block = nil
       @deps = nil

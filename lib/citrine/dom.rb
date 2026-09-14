@@ -14,7 +14,10 @@ module Citrine
     end
 
     def self.mount_at(element_id, component)
-      Citrine.renderer = new
+      # F2：一页多根时复用同一渲染器实例（"最后挂载者胜出"会清空先挂载的组件）
+      unless Citrine.renderer.is_a?(DomRenderer)
+        Citrine.renderer = new
+      end
       Citrine.mount(component, Citrine.renderer.document_element(element_id))
     end
 
@@ -56,7 +59,7 @@ module Citrine
     end
 
     def set_text(node, text)
-      node.dom[:textContent] = text
+      node.dom[:textContent] = text.to_s
     end
 
     def setup_widget(node)
@@ -69,10 +72,13 @@ module Citrine
     def setup_text_input(node)
       el = node.dom
       el[:type] = "text"
-      signal = node.props[:value]
-      if signal.is_a?(Signal)
-        node.owned_effects << Effect.create { el[:value] = signal.get }
-        el.addEventListener("input", ->(_event) { signal.set(el[:value]) })
+      value = node.props[:value]
+      if value.is_a?(Signal)
+        node.owned_effects << Effect.create { el[:value] = value.get.to_s }
+        el.addEventListener("input", ->(_event) { value.set(el[:value]) })
+      elsif value.is_a?(String)
+        # F20：字面量初值也要落到 DOM，保持与 SSR 输出一致
+        el[:value] = value
       end
       handler = node.props[:on_enter]
       return unless handler
@@ -86,7 +92,13 @@ module Citrine
     def setup_check_box(node)
       el = node.dom
       el[:type] = "checkbox"
-      el[:checked] = node.props[:checked] ? true : false
+      checked = node.props[:checked]
+      if checked.is_a?(Signal)
+        # F19：Signal 驱动的勾选态要读信号并保持响应，而不是把对象当 truthy
+        node.owned_effects << Effect.create { el[:checked] = checked.get ? true : false }
+      else
+        el[:checked] = checked ? true : false
+      end
       handler = node.props[:on_change]
       return unless handler
 
