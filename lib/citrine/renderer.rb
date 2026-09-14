@@ -653,6 +653,24 @@ module Citrine
       raise NotImplementedError, "#{self.class} 不支持 portal"
     end
 
+    private
+
+    # Context 解析（S1-3）：沿当前渲染遍历栈向上找提供 name 的**最近**祖先组件
+    # （跳过读者自己——组件读自己的 context 时应取到祖先的）。
+    # 只在渲染遍历内可用；消费端首次绑定发生在挂载路径上，之后走缓存绑定。
+    # 供 Component#use_context 跨对象调用，保持 public。
+    def find_context_provider(name, consumer)
+      @parents.reverse_each do |node|
+        owner = node.owner
+        next if owner.nil? || owner.equal?(consumer)
+
+        return owner if owner.provides_context?(name)
+      end
+      nil
+    end
+
+    public :find_context_provider
+
     # ── 平台钩子 ───────────────────────────────────────────
 
     def reactive?

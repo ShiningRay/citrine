@@ -194,6 +194,27 @@ module Citrine
         @effect_defs ||= superclass.respond_to?(:effect_defs) ? superclass.effect_defs.dup : []
       end
 
+      # ── Context 依赖注入（S1-3）────────────────────────────
+      # 声明本组件向后代提供名为 name 的 context（可给默认值），并定义读写器：
+      #   context :theme, default: { mode: "light" }
+      #   def view
+      #     self.theme = { mode: "dark" }   # 提供值（深相等不变时不通知）
+      #     ...                             # 后代经 use_context(:theme) 读取
+      #   end
+      def context(name, default: nil)
+        if DSL_METHODS.include?(name)
+          raise ArgumentError, "context :#{name} 与 DSL 方法同名，请改名"
+        end
+
+        context_defs[name] = default
+        define_method("#{name}=") { |value| context_signal(name).set(value) }
+        define_method(name) { context_signal(name).get }
+      end
+
+      def context_defs
+        @context_defs ||= superclass.respond_to?(:context_defs) ? superclass.context_defs.dup : {}
+      end
+
       # ── 错误边界（S1-6）────────────────────────────────────
       # 声明本组件的渲染兜底：块 / 子组件 view 在本组件的块里抛错时，
       # 以异常对象为实参调用兜底，其输出替换该块本轮的内容；
@@ -279,6 +300,37 @@ module Citrine
 
     def signals
       @signals ||= {}
+    end
+
+    # ── Context 依赖注入（S1-3）────────────────────────────────
+    # provider 侧：context 信号按 name 懒创建（初值来自 context 声明的默认值）
+    def context_signal(name)
+      raise ArgumentError, "未声明的 context: #{name}" unless self.class.context_defs.key?(name)
+
+      (@context_signals ||= {})[name] ||= Signal.new(self.class.context_defs[name])
+    end
+
+    def provides_context?(name)
+      self.class.context_defs.key?(name)
+    end
+
+    # consumer 侧：use_context(:name)。首次读取在渲染遍历栈上向上解析**最近的**
+    # 提供者组件（跳过读者自己），绑定到它的 context 信号——之后的重跑（哪怕
+    # 发生在 provider 不在渲染的时机）都走缓存绑定，信号变化只重跑读它的块。
+    # 祖先链上找不到提供者时显式报错，不静默 nil。
+    def use_context(name)
+      (@context_bindings ||= {})[name] ||= resolve_context(name)
+      @context_bindings[name].get
+    end
+
+    def resolve_context(name)
+      provider = Citrine.renderer&.find_context_provider(name, self)
+      unless provider
+        raise ArgumentError,
+              "use_context(:#{name})：祖先链上没有组件提供该 context（先在祖先里 context :#{name}）"
+      end
+
+      provider.context_signal(name)
     end
 
     # 按 key 取用的信号表（组件内）：同一个 (name, key) 只会建一个信号，
