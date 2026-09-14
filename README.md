@@ -93,17 +93,19 @@ v1 已知限制：列表为块级整体重建（无 keyed 复用）；集合为�
 ```
 ├── GOALS.md              # 愿景 / 决策 / 路线图 / 参考资料（项目主文档）
 ├── lib/
-│   ├── rv.rb             # 入口：装配 + Citrine.mount / Citrine.render
-│   ├── rv/signal.rb      # Signal / Effect（平台无关，CRuby 可测）
-│   ├── rv/node.rb        # 元素树节点（平台无关）
-│   ├── rv/component.rb   # 组件基类：prop / state / computed 三宏 + 元素 DSL
-│   ├── rv/renderer.rb    # 渲染器基类：树管理 / Effect 装配 / 块级重建（平台无关）
-│   ├── rv/dom.rb         # Web DOM 渲染器（Opal 专用）
-│   ├── rv/canvas.rb      # Canvas 2D 渲染器（Opal 专用，自管布局 + 命中检测）
-│   ├── rv/string_renderer.rb # render-to-string（纯 CRuby）
-│   ├── rv/dev_server.rb  # 开发服务器：热刷新 + 错误浮层（纯 CRuby）
-│   ├── rv/packager.rb    # macOS .app 打包器（纯 CRuby）
-│   └── rv/browser.rb     # 浏览器入口
+│   ├── citrine.rb        # 入口：装配 + Citrine.mount / Citrine.unmount / Citrine.render
+│   ├── citrine/signal.rb # Signal / Effect（平台无关，CRuby 可测）
+│   ├── citrine/num.rb    # 跨平台数值工具（idiv / round_to / integral? / finite? …）
+│   ├── citrine/key_event.rb # 键盘事件（平台无关视图；G-9）
+│   ├── citrine/node.rb   # 元素树节点（平台无关）
+│   ├── citrine/component.rb # 组件基类：三宏 + 元素 DSL + 生命周期/键盘声明
+│   ├── citrine/renderer.rb # 渲染器基类：树管理 / Effect 装配 / 块级重建（平台无关）
+│   ├── citrine/dom.rb    # Web DOM 渲染器（Opal 专用）
+│   ├── citrine/canvas.rb # Canvas 2D 渲染器（Opal 专用，自管布局 + 命中检测）
+│   ├── citrine/string_renderer.rb # render-to-string（纯 CRuby）
+│   ├── citrine/dev_server.rb # 开发服务器：热刷新 + 错误浮层（纯 CRuby）
+│   ├── citrine/packager.rb # macOS .app 打包器（纯 CRuby）
+│   └── citrine/browser.rb # 浏览器入口
 ├── bin/citrine                # CLI（citrine dev / citrine package）
 ├── desktop/main.swift    # macOS WKWebView 桌面壳（零依赖，约 55 行）
 ├── build/                # 打包产物（.app）
@@ -111,13 +113,16 @@ v1 已知限制：列表为块级整体重建（无 keyed 复用）；集合为�
 │   ├── components.rb     # 共享组件（四个后端复用同一份代码）
 │   ├── counter.rb|html   # M1 示例：state / computed / 事件（DOM）
 │   ├── todo.rb|html      # M1 示例：列表 / 受控输入 / 勾选 / 删除（DOM）
-│   ├── reactive_props.rb|html # 响应式属性：props 传 Proc，订阅收敛到节点（G-2）
+│   ├── reactive_props.rb|html # 响应式属性 + 全局键盘 + 卸载（G-2 / G-9 / G-10）
+│   ├── num_parity.rb     # 数值工具的跨平台一致性样本（rake parity 用）
 │   ├── canvas_counter.rb|html / canvas_todo.rb|html # M3 Canvas 示例
 │   ├── ssr_demo.rb       # M3 示例：CRuby 下 render-to-string
 │   ├── stub_check.js     # Node DOM 桩验收脚本
 │   └── canvas_stub_check.js # Node Canvas 桩验收脚本
 ├── test/
 │   ├── signal_test.rb    # 核心机制单测（CRuby / minitest）
+│   ├── component_test.rb # 生命周期 / 键盘分发 / KeyEvent 单测
+│   ├── num_test.rb       # 数值工具单测
 │   └── render_test.rb    # StringRenderer + MemoryRenderer 单测
 └── spike/                # M0 验证存档（browser + hermes）
 ```
@@ -161,13 +166,39 @@ ruby -run -e httpd . -p 4401
 
 ### ⚠️ 跨平台语义陷阱（CRuby 单测全绿 ≠ 浏览器正确，务必先读）
 
-1. **整数除法返回浮点**：`7 / 2` 在 CRuby 是 `3`，Opal 下是 `3.5`。金额/数量计算请显式
-   取整（`(a / b).to_i`）或自建 `idiv` 工具方法——否则格式化输出会出现 `1,234,567,.89` 乱码。
-2. **负数取整方向不同**：`(-1.5).round` CRuby 为 `-2`，Opal 为 `-1`（JS `Math.round` 朝 +∞）。
-   需要对称取整时先取绝对值、取整后再贴符号。
+> 前两条的通用答案是 **`Citrine::Num`**（`idiv` / `round_to` / `round` / `integral?` /
+> `finite?` / `percent`）——别在应用里再各写一份。`rake parity` 会把这套工具在 CRuby 与
+> Opal 下各跑一遍并逐字节比对（CI 已接入）。
+
+1. **整数除法返回浮点**：`7 / 2` 在 CRuby 是 `3`，Opal 下是 `3.5`。凡需整数商请用
+   `Citrine::Num.idiv(a, b)`——注意 `(a / b).to_i` **不是**等价替代：它向零截断，
+   `-7 / 2` 会得到 `-3` 而 Ruby 的语义是 `-4`。金额/数量算错时格式化输出会出现
+   `1,234,567,.89` 这类乱码。
+2. **负数取整方向不同**：`(-1.5).round` CRuby 为 `-2`（远离零），Opal 为 `-1`
+   （JS `Math.round` 朝 +∞；上游修复见 opal/opal#2808）。要跨平台一致请用
+   `Citrine::Num.round_to(value, digits)`——它先取绝对值再贴符号。
 3. **`Signal` 名字遮蔽**：Ruby/Opal 标准库里另有 `::Signal`（进程信号类）。在组件里写裸
    `Signal.new(...)` 会拿到那个空类并报 `undefined method 'get'`——请始终写全限定名
    `Citrine::Signal`，或使用 `state` 宏。
+4. **可变字符串方法不存在**：`String#<<` / `#gsub!` / `#[]=` 在 Opal 下抛
+   `NotImplementedError`（上游明文记录的设计选择：字符串不可变）。累积字符串用
+   `buffer = buffer + ch` 或数组 `join`。
+5. **反引号里不要插值 `Native` 包装对象**：`` `#{el}.focus()` `` 里的 `el` 是 Opal 的
+   `Native::Object` 包装器，生成的 JS 里 `el.focus` 是 `undefined` → **静默不生效**。
+   原生互操作优先用 Ruby 侧方法调用（`el.focus`），反引号只留给无法用方法调用表达的场景。
+6. **从 JS 反调 Ruby 方法要知道改名规则**：`!` → `$excl`、`?` → `$question`、`=` → `$eq`
+   （手写 `$focus_editor!()` 会生成非法 JS，整个 bundle 加载失败）。更稳的写法是
+   `Opal.send(obj, "focus_editor!")`，或在插值里用 `#{obj.focus_editor!}` 让编译器替你改名。
+7. **Ruby 局部变量会遮蔽反引号里的 JS 全局**：`def initialize(app, window = nil)` 之后，
+   反引号里的 `window` 指的是那个参数而不是全局对象，症状是"没反应"。
+   别用 `window` / `document` / `event` / `name` 当变量名或参数名。
+8. **整数值的浮点会丢掉 `.0`**：Opal 下 `2.0.to_s` 是 `"2"`（`inspect` 同），CRuby 是 `"2.0"`
+   ——显示层若依赖 `to_s` 输出小数位，两侧会不一样（上游 ruby/spec 的该用例至今在
+   filter 列表里）。要定长小数请用 `Kernel#format`：`format("%.2f", 2.0)` → `"2.00"`（两侧一致）。
+9. **`整数 ** 0` 会返回 Rational**：`10 ** 0` 在 Opal 下是 `1/1`（`Rational`），CRuby 是 `1`。
+   成因是 `opal/corelib/number.rb` 的 `Integer#**` 把 `other > 0` 当成了"整数快路径"的条件
+   ——指数为 0 也被归进负指数（Rational）分支。`Citrine::Num` 内部已绕开；
+   上游修复已另提（同 `Float#round` 的处置路径）。
 
 ### 框架备忘
 

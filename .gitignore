@@ -1,5 +1,6 @@
 # 编译产物与打包输出
 /build/
+/tmp/
 /examples/counter.js
 /examples/todo.js
 /examples/reactive_props.js

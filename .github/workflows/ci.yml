@@ -34,8 +34,10 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-      - name: 四套桩验收
+      - name: 五套桩验收
         run: bundle exec rake stubs
+      - name: 数值工具跨平台一致性（G-11）
+        run: bundle exec rake parity
 
   package:
     name: macOS 打包冒烟
