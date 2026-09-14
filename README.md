@@ -236,6 +236,10 @@ ruby -run -e httpd . -p 4401
   子类继承父类声明、按声明顺序执行；`ref: :editor` 把元素句柄登记到 `component.refs[:editor]`
   （DOM 下即元素本身，可直接 `.focus`）；`Citrine.unmount(component)` 卸载整棵组件树——
   销毁所有 Effect、跑 `on_unmount`、清空 refs、解绑全局键盘。
+- **声明式订阅 `watch`**：`watch :sync_title` / `watch { ... }` —— 挂载后跑一次，之后**它读到的信号**
+  一变就重跑；卸载时框架自动 dispose，不必再手写 `on_mount :setup` + `on_unmount :teardown` 这对样板。
+  跑在自己的 Effect 里（块内读到的才是依赖）、在 mount 钩子之后创建、SSR 不建 Effect 故不创建。
+  与 `computed` 的分工：`computed` 产出值，`watch` 做副作用。
 - **布局方向必须显式**：`box` 的默认方向是 CSS 的 row（横排），而面板/网格这类容器绝大多数要竖排——
   忘了写方向时，真机上会"塌成一条"（行情终端面板塌成 2px、电子表格网格 553×35），
   而**桩里没有布局引擎，测不出来**。因此提供语法糖：`stack { }` = 竖排，`row { }` = 横排

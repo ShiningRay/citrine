@@ -140,6 +140,27 @@ module Citrine
         unmount_hooks.concat(collect_hooks(:on_unmount, handlers, block))
       end
 
+      # 声明式 Effect（订阅）：块 / 方法体挂载后跑一次，之后**它读到的信号**一变就重跑；
+      # 卸载时自动 dispose——不必再手写 `on_mount :setup` + `on_unmount :teardown` 这对样板。
+      #
+      #   class Grid < Citrine::Component
+      #     watch :refresh_selection        # 方法体在组件实例上执行
+      #     watch { sync_title(selected) }  # 也可以直接给块
+      #   end
+      #
+      # 要点：
+      #   · 跑在**自己的 Effect** 里——块内读到的信号才是依赖，别在块外先读好再传进来；
+      #   · 在 mount 钩子之后创建（要读 DOM 的输出放 on_mount）；SSR 不建 Effect，故不创建；
+      #   · 与 computed 的分工：computed 产出值，watch 做副作用（同步 DOM/存储、记日志…）。
+      def watch(*handlers, &block)
+        watch_defs.concat(collect_hooks(:watch, handlers, block))
+      end
+
+      # 声明过的 watcher 体（子类继承父类的，按声明顺序）
+      def watch_defs
+        @watch_defs ||= superclass.respond_to?(:watch_defs) ? superclass.watch_defs.dup : []
+      end
+
       # 声明一个 window 级键盘处理器（Symbol 或 Proc）；卸载时自动解绑
       #
       #   class Editor < Citrine::Component
@@ -336,9 +357,31 @@ module Citrine
     end
 
     def run_unmount_hooks
+      dispose_watch_effects # 先停订阅，再跑清理钩子（清理时不该再被信号打回来）
       refs.clear
       self.class.unmount_hooks.each { |hook| run_hook(hook) }
     end
+
+    # 声明过的 watch 体各起一个 Effect：挂载后跑一次，之后依赖变化就重跑。
+    # 由**响应式**渲染器在挂载路径上调用（SSR 不建 Effect，故不调用）。
+    def run_watch_effects
+      @watch_effects ||= []
+      return self unless @watch_effects.empty? # 重复调用（复用路径）不重复创建
+
+      self.class.watch_defs.each do |body|
+        @watch_effects << Effect.create { run_hook(body) }
+      end
+      self
+    end
+
+    def dispose_watch_effects
+      @watch_effects&.each(&:dispose)
+      @watch_effects = nil
+      self
+    end
+
+    # 诊断/测试：当前存活的 watcher 数
+    def watch_effect_count = (@watch_effects || []).size
 
     private
 
