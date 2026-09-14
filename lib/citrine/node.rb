@@ -4,18 +4,32 @@ module Citrine
   # 元素树节点：类型 + 属性 + 内容 block + 子节点。
   # 平台无关（M3 抽象渲染器接口的输入）；由渲染器解释挂载。
   class Node
-    attr_reader :type, :props, :block, :owner, :children, :owned_effects
+    attr_reader :type, :owner, :children, :owned_effects
+    attr_accessor :props, :block
     attr_accessor :dom, :text
     # 上一次应用过的内联样式键：响应式 style 变化时用来清掉已消失的键
     attr_accessor :applied_style_keys
+    # keyed 复用的身份：显式 key + 身份标签（元素类型 / 组件类）
+    attr_accessor :reuse_key, :identity
+    # 组件边界节点：由 `render(Child)` 产生，承载子组件 view 的输出。
+    # 它自己不对应任何 DOM/画布元素（虚拟节点），只提供"一块可整体复用、整体销毁的区域"。
+    attr_accessor :rendered_component
+    # 该节点的两个 Effect（响应式属性 / 内容 block）：复用时用来就地重跑
+    attr_accessor :props_effect, :block_effect
+    # 已绑定的事件监听（DOM 渲染器用；复用时先解绑再按新 props 重绑）
+    attr_accessor :bound_listeners
 
-    def initialize(type, props = {}, block = nil, owner: nil)
+    def initialize(type, props = {}, block = nil, owner: nil, virtual: false)
       @type = type
       @props = props
       @block = block
       @owner = owner
       @children = []
       @owned_effects = []
+      @virtual = virtual
     end
+
+    # 虚拟节点：不产生平台元素（组件边界；将来 fragment 也走它）
+    def virtual? = @virtual
   end
 end

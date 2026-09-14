@@ -139,4 +139,19 @@ class ComponentTest < Minitest::Test
   def test_undeclared_state_signal_raises
     assert_raises(ArgumentError) { TestWidget.new.signal(:nope) }
   end
+  # 回归：事件回调 Proc 必须保持闭包 self。嵌套组件（P0-1）里回调由父组件传入，
+  # instance_exec 重绑到 emit 的 owner 会让父组件回调里的方法调用落到子组件上。
+  def test_proc_event_handler_keeps_closure_self
+    captured = nil
+    handler = ->(ev) { captured = [self, ev] }
+    TestWidget.new.handle_event(handler, 42)
+    assert_equal self, captured[0]
+    assert_equal 42, captured[1]
+  end
+
+  def test_proc_event_handler_without_event_keeps_closure_self
+    captured = nil
+    TestWidget.new.handle_event(-> { captured = self })
+    assert_equal self, captured
+  end
 end

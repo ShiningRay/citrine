@@ -42,7 +42,10 @@ module Citrine
     def setup_widget(_node); end
 
     def finalize(node)
-      node.dom = serialize(node) unless node.type == :root
+      return if node.type == :root
+
+      # 虚拟节点（组件边界）：自己没有元素，把子节点的序列化结果直接上交给父节点
+      node.dom = node.virtual? ? node.children.map(&:dom).join : serialize(node)
     end
 
     def serialize(node)

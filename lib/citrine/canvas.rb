@@ -177,7 +177,7 @@ module Citrine
       direction, pad, gap = box_axes(node)
       cx = x + pad
       cy = y + pad
-      node.children.each do |child|
+      layout_children(node).each do |child|
         place(child, cx, cy)
         if direction == :column
           cy += child.dom[:h] + gap
@@ -187,12 +187,17 @@ module Citrine
       end
     end
 
+    # 虚拟节点（组件边界）没有自己的盒子：它的后代直接参与父容器的线性布局与绘制
+    def layout_children(node)
+      node.children.flat_map { |child| child.virtual? ? layout_children(child) : [child] }
+    end
+
     # ── 绘制 ───────────────────────────────────────────────
 
     def paint(node)
       case node.type
       when :root
-        node.children.each { |child| paint(child) }
+        layout_children(node).each { |child| paint(child) }
       when :box
         style = style_of(node)
         bg = style[:background] || style[:background_color]
@@ -201,7 +206,7 @@ module Citrine
           @ctx.fillStyle = bg
           @ctx.fillRect(node.dom[:x], node.dom[:y], node.dom[:w], node.dom[:h])
         end
-        node.children.each { |child| paint(child) }
+        layout_children(node).each { |child| paint(child) }
       when :label
         paint_label(node)
       when :button

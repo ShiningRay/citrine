@@ -1,8 +1,8 @@
 // stub_check.js — Node DOM 桩验收 M1 示例（不起浏览器）
-// 用法: node stub_check.js counter | todo | reactive_props
+// 用法: node stub_check.js counter | todo | reactive_props | keyed_list
 const which = process.argv[2];
-if (!["counter", "todo", "reactive_props"].includes(which)) {
-  console.error("用法: node stub_check.js counter|todo|reactive_props");
+if (!["counter", "todo", "reactive_props", "keyed_list"].includes(which)) {
+  console.error("用法: node stub_check.js counter|todo|reactive_props|keyed_list");
   process.exit(2);
 }
 
@@ -14,7 +14,13 @@ function makeEl(tag) {
     children: [],
     parentElement: null,
     _listeners: {},
-    appendChild(c) { c.parentElement = this; this.children.push(c); return c; },
+    appendChild(c) {
+      // 真实 DOM 的 appendChild 是"移动"：已在别处的节点会先被摘下来（keyed 复用依赖这点）
+      if (c.parentElement && c.parentElement !== this) c.parentElement.removeChild(c);
+      c.parentElement = this;
+      if (!this.children.includes(c)) this.children.push(c);
+      return c;
+    },
     removeChild(c) { c.parentElement = null; this.children = this.children.filter((x) => x !== c); },
     addEventListener(ev, fn) { (this._listeners[ev] = this._listeners[ev] || []).push(fn); },
     fire(ev, event) { (this._listeners[ev] || []).forEach((fn) => fn(event || {})); },
@@ -106,6 +112,50 @@ if (which === "counter") {
   assert("卸载后 window 监听解绑", (windowListeners.keydown || []).length, 0);
   fireWindow("keydown", { key: "ArrowRight" });
   assert("卸载后按键不再有反应", app.children.length, 0);
+} else if (which === "keyed_list") {
+  // 组件嵌套 + keyed 复用（P0-1）：重排/增删不能换掉行节点与输入框
+  const rows = () => findAll(app, "div").filter((d) => (d.className || "").split(" ").includes("row"));
+  const inputs = () => findAll(app, "input");
+  const count = () => texts(app).find((t) => t.startsWith("行数"));
+  const clickBtn = (text) => findButton(app, text).fire("click");
+  const sameSet = (a, b) => a.length === b.length && a.every((x) => b.includes(x));
+
+  assert("初始 3 行", rows().length, 3);
+  assert("初始顺序", count(), "行数：3 · 顺序：A B C");
+
+  // 在 B 行的输入框里打字
+  const beforeRows = rows();
+  const beforeInputs = inputs();
+  const bInput = findAll(beforeRows[1], "input")[0];
+  bInput.value = "12345";
+  bInput.fire("input");
+  assert("输入已记录", bInput.value, "12345");
+
+  // 重排：行节点与输入框都应被复用（只是换位置）
+  clickBtn("重排");
+  const afterRows = rows();
+  const afterInputs = inputs();
+  assert("重排后顺序", count(), "行数：3 · 顺序：C B A");
+  assert("重排复用同一批行节点", sameSet(afterRows, beforeRows), true);
+  assert("重排复用同一批输入框", sameSet(afterInputs, beforeInputs), true);
+  assert("输入框的值没丢", findAll(afterRows[1], "input")[0].value, "12345");
+  assert("输入框还是同一个节点", findAll(afterRows[1], "input")[0], bInput);
+
+  // 加一行：既有行不受影响，只多一个新行
+  clickBtn("加一行");
+  const afterAdd = rows();
+  assert("加一行后 4 行", afterAdd.length, 4);
+  assert("加行不换旧行", afterAdd.slice(0, 3).every((r, i) => r === afterRows[i]), true);
+  assert("加行不动输入框", findAll(afterAdd[1], "input")[0], bInput);
+
+  // 删第一行：只摘掉那一行
+  const removed = afterAdd[0];
+  clickBtn("删第一行");
+  const afterDrop = rows();
+  assert("删一行后 3 行", afterDrop.length, 3);
+  assert("被删的行已摘除", afterDrop.indexOf(removed), -1);
+  assert("其余行原样复用", afterDrop.every((r, i) => r === afterAdd[i + 1]), true);
+  assert("输入框仍在且值还在", findAll(afterDrop[0], "input")[0] === bInput && bInput.value, "12345");
 } else if (which === "todo") {
   const summary = () => texts(app).find((t) => t.startsWith("待办"));
   const input = findAll(app, "input").find((i) => i._listeners.input);
