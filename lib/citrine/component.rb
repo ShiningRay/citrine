@@ -319,7 +319,7 @@ module Citrine
 
     def emit(type, props, &block)
       # keyed 复用：命中旧节点就沿用（DOM / 子树 / Effect 全保留）
-      if (existing = Citrine.renderer.reusable_node(props[:key], [:element, type], props))
+      if (existing = Citrine.renderer.reusable_node(props[:key], [:element, type], props, self))
         return Citrine.renderer.refresh_node(existing, props, block)
       end
 

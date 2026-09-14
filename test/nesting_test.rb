@@ -316,6 +316,84 @@ end
     assert_equal plain_before, find_all(root, "plain-2").map(&:dom)
   end
 
+  # 回归（FRICTION F24）：同一父块里按条件换**子组件类型**时，新组件的根元素不能按位置
+  # 抢到旧组件的根节点——抢到的话 refresh_node 会沿用旧节点的 Effect，而 Effect 里是
+  # `node.owner.instance_exec(&node.block)`，owner 仍是旧实例 → 新块在老 self 上执行
+  # （表现为 NameError；Opal/DOM 侧表现为页面卡死）。
+  def test_swapping_component_type_in_same_block_does_not_steal_old_root
+    trade_row = Class.new(Citrine::Component) do
+      prop :trade
+
+      def view = box(css_class: "log-row") { label { trade[:id] } }
+    end
+    order_row = Class.new(Citrine::Component) do
+      prop :order
+
+      def view = box(css_class: "log-row") { label { order[:id] } }
+    end
+    parent = Class.new(Citrine::Component) do
+      state :tab, default: :trades
+
+      define_method(:view) do
+        box(css_class: "log-body") do
+          if tab == :trades
+            render(trade_row, trade: { id: "T1" }, key: "T1")
+            render(trade_row, trade: { id: "T2" }, key: "T2")
+          else
+            render(order_row, order: { id: "O1" }, key: "O1")
+          end
+        end
+      end
+    end.new
+
+    root = mount(parent)
+    texts = collect_texts(root)
+    assert_includes texts, "T1"
+    assert_includes texts, "T2"
+
+    parent.tab = :orders
+
+    texts = collect_texts(root)
+    assert_includes texts, "O1", "换组件类型后应渲染新组件的根内容"
+    refute_includes texts, "T1", "旧组件的根内容应随卸载消失"
+    refute_includes texts, "T2"
+  end
+
+  # 同一族：组件根被**普通元素**取代时也不能复用那个节点（否则旧组件实例既不卸载、
+  # 其状态与 Effect 还会继续挂在被"改嫁"的节点上）
+  def test_component_root_is_not_reused_as_a_plain_element
+    unmounted = 0
+    row = Class.new(Citrine::Component) do
+      prop :id
+      on_unmount -> { unmounted += 1 }
+
+      def view = box(css_class: "row") { label { id } }
+    end
+    parent = Class.new(Citrine::Component) do
+      state :show_row, default: true
+
+      define_method(:view) do
+        stack do
+          if show_row
+            render(row, id: "R1", key: "R1")
+          else
+            box(css_class: "row") { label { "plain" } }
+          end
+        end
+      end
+    end.new
+
+    root = mount(parent)
+    assert_includes collect_texts(root), "R1"
+
+    parent.show_row = false
+
+    texts = collect_texts(root)
+    assert_includes texts, "plain"
+    refute_includes texts, "R1"
+    assert_equal 1, unmounted, "被取代的子组件应走卸载钩子"
+  end
+
 def test_components_keyword_conflict_raises_with_hint
   error = assert_raises(ArgumentError) do
     Class.new(Citrine::Component) do
