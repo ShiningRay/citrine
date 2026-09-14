@@ -8,6 +8,7 @@
 /examples/props_widgets.js
 /examples/canvas_counter.js
 /examples/canvas_todo.js
+/examples/browser_check.js
 *.gem
 Gemfile.lock
 
