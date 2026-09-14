@@ -10,11 +10,31 @@ module Citrine
   module Style
     module_function
 
+    # 有数值默认补 px 的属性（显式字符串单位不受影响）
+    PX_PROPERTIES = %i[
+      width height min_width min_height max_width max_height
+      border_radius top left right bottom inset
+      padding padding_left padding_right padding_top padding_bottom
+      margin margin_left margin_right margin_top margin_bottom
+    ].freeze
+
+    # 数值语义上无单位的属性
+    UNITLESS_PROPERTIES = %i[
+      flex flex_grow flex_shrink order opacity z_index line_height
+      font_weight column_count zoom
+    ].freeze
+
     def normalize(style)
       return {} unless style
 
       style.each_with_object({}) do |(key, value), out|
-        out[underscore(key)] = normalize_value(value)
+        key = underscore(key)
+        value = normalize_value(value)
+        next if value.nil? # F17：nil 值剔除而非输出非法 CSS
+        if value.is_a?(Numeric) && PX_PROPERTIES.include?(key) && !UNITLESS_PROPERTIES.include?(key)
+          value = "#{value}px"
+        end
+        out[key] = value
       end
     end
 

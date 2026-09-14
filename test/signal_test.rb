@@ -52,6 +52,23 @@ class SignalTest < Minitest::Test
     assert_equal [0], log
   end
 
+  # 回归（RubyWorld 实测发现）：广播遍历 @subs.dup 快照时，
+  # 前序 effect 的重跑可能 dispose 快照中尚未执行的同源 effect，
+  # 此时 run/release_deps 不得在 nil（已清空的依赖表）上崩溃。
+  def test_disposing_sibling_effect_during_broadcast_is_safe
+    s = Citrine::Signal.new(0)
+    victim = nil
+    log = []
+    executioner = Citrine::Effect.create { s.get; victim&.dispose }
+    victim = Citrine::Effect.create { s.get; log << 'v' }
+
+    s.set(1) # executioner 重跑时 dispose victim；victim 仍在广播快照里
+    assert_equal ['v'], log
+
+    s.set(2) # victim 已订阅解除，不再触发；executioner 幂等 dispose 亦不崩溃
+    assert_equal ['v'], log
+  end
+
   def test_set_same_value_skips_notification
     s = Citrine::Signal.new(1)
     runs = 0
@@ -70,6 +87,27 @@ class SignalTest < Minitest::Test
 
     source.set(2)
     assert_equal [10, 20], log
+  end
+
+  def test_disposed_effect_in_broadcast_snapshot_is_safe
+    # F1 回归（citrine-market-terminal 摩擦记录）：
+    # 祖先 Effect 重跑时销毁后代 Effect，后代仍在信号的通知快照里被迭代。
+    # 修复前：对已 dispose 的 effect 调 run → release_deps 对 nil 调 each → NoMethodError
+    q = Citrine::Signal.new("")
+    outer_log = []
+
+    outer = Citrine::Effect.create { outer_log << q.get }
+    inner = Citrine::Effect.create { q.get } # 后创建，订阅排在通知快照后面
+
+    # 祖先重跑时销毁后代（渲染器块级重建即此模式）
+    outer.instance_variable_set(:@block, -> {
+      inner.dispose
+      outer_log << "outer:#{q.get}"
+    })
+
+    q.set("x") # 通知快照 [outer, inner]：inner 在 dispose 后仍被迭代到
+
+    assert_includes outer_log, "outer:x"
   end
 end
 
