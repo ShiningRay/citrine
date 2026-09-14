@@ -1,0 +1,256 @@
+# frozen_string_literal: true
+
+# Citrine 开发服务器（纯 CRuby 标准库，无新依赖）
+#
+# 功能：
+#   - 静态服务指定目录（html/css/…），"/" 提供目录索引
+#   - *.js 请求按对应 *.rb 现场编译（Opal CLI），带 mtime 缓存
+#   - 监听 lib/ 与目录下 .rb 变更，经 SSE 通知浏览器整页刷新
+#   - 编译失败时返回错误浮层脚本（页面不再白屏）
+#
+# 用法：bin/citrine dev [目录] [-p 端口]
+require "socket"
+require "open3"
+require "json"
+require "tmpdir"
+
+module Citrine
+  class DevServer
+    CONTENT_TYPES = {
+      "html" => "text/html; charset=utf-8",
+      "js"   => "application/javascript",
+      "css"  => "text/css",
+      "png"  => "image/png",
+      "svg"  => "image/svg+xml",
+      "map"  => "application/json"
+    }.freeze
+
+    CLIENT_JS = <<~'JS'
+      (function () {
+        var overlay = null;
+        window.__rvShowError = function (msg) {
+          if (!overlay) {
+            overlay = document.createElement("pre");
+            overlay.style.cssText =
+              "position:fixed;z-index:99999;top:0;left:0;right:0;margin:0;padding:12px;" +
+              "background:#b91c1c;color:#fff;font:13px/1.5 monospace;white-space:pre-wrap;" +
+              "max-height:60vh;overflow:auto;";
+            document.documentElement.appendChild(overlay);
+          }
+          overlay.textContent = "⚠ Citrine 编译错误（修正并保存即自动恢复）\n\n" + msg;
+        };
+        window.__rvClearError = function () {
+          if (overlay) { overlay.remove(); overlay = null; }
+        };
+        var es = new EventSource("/__rv_reload");
+        es.onmessage = function (e) {
+          if (e.data === "reload") { window.__rvClearError(); location.reload(); }
+        };
+      })();
+    JS
+
+    def self.run!(args)
+      dir = nil
+      port = 4402
+      i = 0
+      while i < args.length
+        arg = args[i]
+        if arg == "-p"
+          port = args[i + 1].to_i
+          i += 2
+        elsif arg !~ /\A-/
+          dir = arg
+          i += 1
+        else
+          i += 1
+        end
+      end
+      new(dir || "examples", port).start
+    end
+
+    def initialize(dir, port)
+      @dir = File.expand_path(dir)
+      @root = File.expand_path("../..", __dir__) # 项目根（dev_server.rb 位于 lib/citrine/）
+      @port = port
+      @clients = [] # 每个 SSE 连接一个 Queue
+      @cache = {}   # js 路径 => { key:, body: }
+      @watched = {}
+      @key = ""
+      @mutex = Mutex.new
+    end
+
+    def start
+      raise "目录不存在: #{@dir}" unless File.directory?(@dir)
+
+      refresh_watch_state
+      Thread.new { watch_loop }
+      server = TCPServer.new("127.0.0.1", @port)
+      puts "Citrine dev server → http://localhost:#{@port}/"
+      puts "  目录: #{@dir}；监听 lib/**/*.rb 与该目录 **/*.rb"
+      loop do
+        sock = server.accept
+        Thread.new(sock) do |s|
+          begin
+            handle(s)
+          rescue StandardError => e
+            warn "[citrine] #{e.class}: #{e.message}"
+          ensure
+            s.close unless s.closed?
+          end
+        end
+      end
+    end
+
+    private
+
+    # ── 文件监听 ───────────────────────────────────────────
+
+    def watch_loop
+      loop do
+        sleep 0.3
+        before = @watched
+        refresh_watch_state
+        next if @watched == before
+
+        @mutex.synchronize { @cache.clear }
+        changed = (@watched.keys | before.keys).select do |f|
+          @watched[f] != before[f]
+        end
+        puts "[citrine] 变更: #{changed.map { |f| f.delete_prefix("#{@root}/") }.join(', ')} → 通知刷新"
+        broadcast("reload")
+      end
+    end
+
+    def refresh_watch_state
+      state = {}
+      [File.join(@root, "lib"), @dir].each do |base|
+        next unless File.directory?(base)
+
+        Dir.glob(File.join(base, "**", "*.rb")).each do |f|
+          state[f] = File.mtime(f).to_f
+        end
+      end
+      @watched = state
+      @key = state.hash.to_s
+    end
+
+    def broadcast(message)
+      @clients.each { |queue| queue << message }
+    end
+
+    # ── HTTP 处理 ──────────────────────────────────────────
+
+    def handle(sock)
+      request = sock.gets.to_s
+      return if request.empty?
+
+      path = request.split(" ")[1].to_s
+      path = path.split("?").first
+      # 消费剩余请求头（读到空行）
+      until (line = sock.gets.to_s).strip.empty?
+        break if sock.closed?
+      end
+
+      case path
+      when "/__rv_reload" then sse(sock)
+      when "/__rv_client.js" then respond(sock, 200, "application/javascript", CLIENT_JS)
+      when "/" then index(sock)
+      else
+        route_file(sock, path)
+      end
+    end
+
+    def route_file(sock, path)
+      full = File.expand_path(File.join(@dir, path.delete_prefix("/")))
+      unless full.start_with?(@dir) && File.file?(full)
+        return respond(sock, 404, "text/plain; charset=utf-8", "not found: #{path}")
+      end
+
+      if path.end_with?(".js")
+        rb = full.sub(/\.js$/, ".rb")
+        return serve_compiled(sock, path, rb) if File.exist?(rb)
+      end
+
+      body = File.binread(full)
+      type = CONTENT_TYPES[full.split(".").last] || "application/octet-stream"
+      if full.end_with?(".html")
+        body = inject_client(body)
+        type = CONTENT_TYPES["html"]
+      end
+      respond(sock, 200, type, body)
+    end
+
+    def serve_compiled(sock, path, rb_full)
+      cached = @cache[path]
+      return respond(sock, 200, "application/javascript", cached[:body]) if cached && cached[:key] == @key
+
+      tmp = File.join(Dir.tmpdir, "rv_dev_#{Process.pid}_#{rand(1_000_000)}.js")
+      # 与手工编译完全一致的形态：cwd = 源文件所在目录，-I附着式传参
+      out, err, status = Open3.capture3(
+        "opal", "-c",
+        "-I#{File.join(@root, 'lib')}", "-I.",
+        "-o", tmp, File.basename(rb_full),
+        chdir: File.dirname(rb_full)
+      )
+      if status.success?
+        body = File.binread(tmp)
+        @cache[path] = { key: @key, body: body }
+        respond(sock, 200, "application/javascript", body)
+      else
+        message = (out + "\n" + err).strip.to_json
+        respond(sock, 200, "application/javascript",
+                "window.__rvShowError(#{message});")
+      end
+    ensure
+      File.unlink(tmp) if tmp && File.exist?(tmp)
+    end
+
+    def index(sock)
+      pages = Dir.glob(File.join(@dir, "*.html")).map { |f| File.basename(f) }.sort
+      links = pages.map { |p| %(<li><a href="/#{p}">#{p}</a></li>) }.join("\n")
+      body = <<~HTML
+        <!DOCTYPE html>
+        <html lang="zh"><head><meta charset="utf-8"><title>Citrine dev</title></head>
+        <body style="font-family:sans-serif;padding:24px;line-height:1.8">
+          <h2>Citrine dev server</h2>
+          <p>修改 lib/ 或本目录下的 .rb 文件并保存，浏览器将自动刷新。</p>
+          <ul>#{links}</ul>
+        </body></html>
+      HTML
+      respond(sock, 200, CONTENT_TYPES["html"], body)
+    end
+
+    def inject_client(html)
+      script = %(<script src="/__rv_client.js"></script>)
+      return html.sub("</head>", "#{script}</head>") if html.include?("</head>")
+
+      html.sub("</body>", "#{script}</body>")
+    end
+
+    def sse(sock)
+      sock.write "HTTP/1.1 200 OK\r\n" \
+                 "Content-Type: text/event-stream\r\n" \
+                 "Cache-Control: no-cache\r\n" \
+                 "Connection: keep-alive\r\n\r\n"
+      queue = Queue.new
+      @clients << queue
+      loop do
+        message = queue.pop
+        sock.write "data: #{message}\n\n"
+      end
+    rescue StandardError
+      nil
+    ensure
+      @clients.delete(queue) if queue
+    end
+
+    def respond(sock, status, type, body)
+      reason = { 200 => "OK", 404 => "Not Found" }[status] || "OK"
+      sock.write "HTTP/1.1 #{status} #{reason}\r\n" \
+                 "Content-Type: #{type}\r\n" \
+                 "Content-Length: #{body.bytesize}\r\n" \
+                 "Connection: close\r\n\r\n"
+      sock.write body
+    end
+  end
+end

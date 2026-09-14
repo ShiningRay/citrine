@@ -1,0 +1,11 @@
+# 编译产物与打包输出
+/build/
+/examples/counter.js
+/examples/todo.js
+/examples/canvas_counter.js
+/examples/canvas_todo.js
+*.gem
+Gemfile.lock
+
+# 系统
+.DS_Store
