@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>T-B2：DOM / Canvas 等价断言</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    .split { display: flex; gap: 24px; padding: 16px; align-items: flex-start; }
+    .pane { border: 1px dashed #bbb; padding: 8px; }
+    canvas { background: #fafafa; }
+  </style>
+</head>
+<body>
+  <div class="split">
+    <div class="pane" id="parity-dom"></div>
+    <div class="pane"><canvas id="parity-canvas" width="480" height="320"></canvas></div>
+    <div class="pane"><canvas id="parity-canvas2" width="360" height="120"></canvas></div>
+  </div>
+  <script src="canvas_dom_parity.js"></script>
+</body>
+</html>

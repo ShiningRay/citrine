@@ -9,6 +9,7 @@
 /examples/canvas_counter.js
 /examples/canvas_todo.js
 /examples/browser_check.js
+/examples/canvas_dom_parity.js
 *.gem
 Gemfile.lock
 

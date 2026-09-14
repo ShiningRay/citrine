@@ -92,6 +92,31 @@ task :browser do
   puts "  布局守卫通过：#{report.inspect}"
 end
 
+desc "DOM/Canvas 等价断言（T-B2）：同一 Counter 组件双渲染器输出，文本序列与布局守卫"
+task :canvas_parity do
+  chrome = ENV["CHROME_BIN"] || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  raise "找不到 Chrome（可用 CHROME_BIN 指定路径）" unless File.exist?(chrome)
+
+  Dir.chdir("examples") do
+    sh "opal -c --no-source-map -I../lib -I. -o canvas_dom_parity.js canvas_dom_parity.rb"
+  end
+
+  page = File.expand_path("examples/canvas_dom_parity.html")
+  dom = `"#{chrome}" --headless=new --disable-gpu --no-first-run --virtual-time-budget=3000 --dump-dom "file://#{page}"`
+  match = dom.match(%r{<pre id="parity-report">([^<]+)</pre>})
+  raise "等价页没有产出报告（页面加载失败？）" unless match
+
+  report = JSON.parse(match[1])
+  raise "文本序列不等价：DOM=#{report['dom_texts'].inspect} Canvas=#{report['canvas_texts'].inspect}" unless report["texts_equal"]
+  raise "DOM 容器尺寸下限不满足" unless report["dom_ok"]
+  raise "Canvas 容器尺寸下限不满足" unless report["canvas_ok"]
+  raise "列向兄弟 top 未递增" unless report["column_y_increasing"]
+  raise "text_input 覆盖层缺失" unless report["overlay_input_present"]
+  raise "覆盖层输入未写回 Signal" unless report["input_synced"]
+
+  puts "  DOM/Canvas 等价断言通过（文本序列 / 尺寸下限 / top 递增 / 输入覆盖层）"
+end
+
 task default: :test
 
 desc "数值工具跨平台一致性：CRuby 与 Opal 输出逐字节比对（G-11）"

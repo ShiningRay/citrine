@@ -65,7 +65,7 @@ jobs:
         run: bundle exec rake lint
 
   browser:
-    name: 真实浏览器布局守卫（T-A2）
+    name: 真实浏览器布局守卫（T-A2 + T-B2）
     runs-on: ubuntu-latest
     env:
       CHROME_BIN: /usr/bin/google-chrome
@@ -77,6 +77,8 @@ jobs:
           bundler-cache: true
       - name: headless Chrome 布局守卫（容器尺寸 / 同层兄弟 top）
         run: bundle exec rake browser
+      - name: DOM/Canvas 等价断言（文本序列 / 尺寸 / top 递增 / 输入覆盖层）
+        run: bundle exec rake canvas_parity
 
   package:
     name: macOS 打包冒烟
