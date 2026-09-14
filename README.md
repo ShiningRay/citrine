@@ -1,7 +1,23 @@
-# RubyReact（工作代号 Citrine）
+# Citrine（黄水晶）
 
 用 Ruby 写信号式响应 UI，经 Opal 编译后渲染到 Web、桌面与移动端。
 愿景、架构决策与路线图见 [GOALS.md](GOALS.md)。
+（历史记录中的工作代号 RV 指同一项目。）
+
+## 安装
+
+```bash
+# 从源码（本仓库）
+bundle install
+bin/citrine dev examples
+
+# 从 gem（发布到 rubygems.org 后）
+gem install citrine
+citrine dev <你的应用目录>
+```
+
+说明：Citrine 只通过 RubyGems 分发（源语言是 Ruby，npm 不在分发路径上；
+运行时拆分方案见 GOALS 决策 #7 的例外条件）。
 
 ## 当前状态：M0 / M1 / M2 / M3 / M4a 完成（2026-09-14）
 

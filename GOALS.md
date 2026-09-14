@@ -332,7 +332,7 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 | #4 组件形态 | 随 #3 事实上已定：类组件 + `view` 方法 + block |
 | #5 JS 互操作 | 明确延后，不阻塞 demo |
 | #6 Opal 约束 | M0 验证；Proxy 风险已降级为非致命 |
-| #7 命名/包结构 | **命名已定案（2026-09-14）：Citrine**（黄水晶）。寓意：水晶振荡器是"信号源"的硬件原型，与 signal 框架本质暗合；延续 Ruby 生态宝石命名传统（Opal 先例）。rubygems.org 未占用 ✅、避开 React 商标 ✅；npm 同名包为无关小项目，无碍。代码命名空间 `RV` → `Citrine` 已完成全库重命名（历史记录中的 RV 指同一项目）。分包结构（citrine-core / citrine-dom 等）见第十一节 P2 |
+| #7 命名/包结构 | **命名已定案（2026-09-14）：Citrine**（黄水晶）。寓意：水晶振荡器是"信号源"的硬件原型，与 signal 框架本质暗合；延续 Ruby 生态宝石命名传统（Opal 先例）。rubygems.org 未占用 ✅、避开 React 商标 ✅；npm 同名包为无关小项目，无碍。代码命名空间 `RV` → `Citrine` 已完成全库重命名（历史记录中的 RV 指同一项目）。**包结构定案（同日）：v1 单 gem**（`citrine`，含 CLI 与桌面壳模板，不分包），分包留 P2 视复杂度再拆；**npm 包不做**——源语言是 Ruby，分发主渠道是 RubyGems。唯一例外条件：P1 体积优化若做"运行时拆分"（编译产物不再内嵌 2MB corelib），预编译运行时 `citrine-runtime` 可能以静态资产或 npm 包形式分发 |
 | #8 测试策略 | 依赖 M3 string renderer，节奏匹配 |
 | #9 Rails 集成 | 非目标，不阻塞 |
 
@@ -365,6 +365,7 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 | 2026-09-14 | **Todo 视觉升级**：DSL 新增 `css_class` 透传（DOM→className / SSR→class / Canvas 忽略）；动效分工定式：状态过渡用内联 `transition`，hover/focus/@keyframes 由页面级样式承载（决策 #10 的边界分工）；Canvas 增加纯色护栏（渐变值跳过绘制） | 内联样式无法表达伪类与关键帧，页面样式是正确出口；调查结论：IAB 自动化的 press 不派发键盘事件（探针证实 keydown 到达数为 0），框架无碍——真实键盘与合成事件均正常 |
 | 2026-09-14 | **Roadmap v2 制定**（第十一节）：P0 组合 API（嵌套/keyed 复用/props 传播）+ 生命周期宏 + 响应式集合 → P1 体积/构建/Fast Refresh/DevTools → P2 命名/分包/CI/文档/基准 → P3 平台扩张；附风险对冲清单 | 组件组合是当前最大 API 缺口（无嵌套则不成立"React-like"）；单人维护是三家先行者共同死因，开源与 co-maintainer 为生存项 |
 | 2026-09-14 | **正式命名定案：Citrine**（决策 #7）。完成全库重命名：`RV` → `Citrine`（模块 / lib/citrine/ / bin/citrine / 示例 / 测试 / 文档），全量回归通过（单测 + 四桩 + 重打包 CitrineCounter.app）。候选评估：常见单词名在 rubygems 全被占用，可用候选 Opaline / Rubine / Citrine / Signa 中选定 Citrine | 水晶振荡器 = 信号源的隐喻；宝石命名传统（Opal 先例）；避开 React 商标与主要冲突 |
+| 2026-09-14 | **仓库化 + gem 0.1.0**：代码迁入独立 citrine/ 仓库（git init，首次提交 41 文件），gemspec + version + MIT LICENSE + .gitignore 就绪，`gem build` 通过（citrine-0.1.0.gem，21.5KB，未发布）；决策 #7 包结构定案：v1 单 gem，**npm 不做** | 源语言 Ruby → RubyGems 为唯一分发渠道；npm 的唯一例外是 P1 运行时拆分时的 citrine-runtime 预编译资产 |
 
 ## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
 
