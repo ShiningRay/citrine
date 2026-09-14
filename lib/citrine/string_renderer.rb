@@ -44,8 +44,7 @@ module Citrine
     def finalize(node)
       return if node.type == :root
 
-      # 虚拟节点（组件边界）：自己没有元素，把子节点的序列化结果直接上交给父节点
-      node.dom = node.virtual? ? node.children.map(&:dom).join : serialize(node)
+      node.dom = serialize(node)
     end
 
     def serialize(node)

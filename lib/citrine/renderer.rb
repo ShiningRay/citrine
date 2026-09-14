@@ -77,24 +77,20 @@ module Citrine
       node.reuse_key = node.props[:key]
       node.identity ||= [:element, node.type]
 
-      unless node.virtual?
-        node.dom = create_dom(node)
-        warn_unreactive_proc(node)
-        register_ref(node)
-      end
+      node.dom = create_dom(node)
+      warn_unreactive_proc(node)
+      register_ref(node)
       parent.children << node
-      unless node.virtual?
-        attach(node, attach_target)
-        bind_events(node)
-        setup_widget(node)
-      end
+      attach(node, parent)
+      bind_events(node)
+      setup_widget(node)
 
       # G-2：响应式属性必须在**本节点自己的 Effect** 内求值——挂载路径上直接求值会让
       # 订阅落进外层块（正是要消除的隐性外扩）。重跑只重设属性，不重建子树。
-      if reactive? && !node.virtual? && reactive_props?(node)
+      if reactive? && reactive_props?(node)
         node.props_effect = Effect.create { apply_props(node) }
         node.owned_effects << node.props_effect
-      elsif !node.virtual?
+      else
         apply_props(node)
       end
 
@@ -114,9 +110,12 @@ module Citrine
       node
     end
 
-    # 嵌套组件入口（Component#render 调用）：
-    # 建一个**虚拟边界节点**承载子组件的 view 输出，并以它作为复用/销毁的单位。
-    # 返回该边界节点（它不对应任何平台元素）。
+    # 嵌套组件入口（Component#render 调用）。
+    #
+    # 约定（P0-1/S1）：子组件的 view 必须渲染**恰好一个根节点**——那个节点就是组件的
+    # 复用/销毁单位（不引入虚拟边界层：没有 DOM 中间层，重排就是移动真实节点）。
+    # 复用 = 同一个子组件实例 + 同一个根节点：就地更新 props，并重跑 view 把输出
+    # 调和回这棵根（同一批 DOM、state、Effect 全保留）。
     def render_component(owner, component, props)
       raise "Citrine.render：没有父节点（只能在组件的 view 里渲染子组件）" unless @parents.last
 
@@ -126,36 +125,64 @@ module Citrine
       identity = [:component, klass]
 
       if (existing = reusable_node(key, identity, child_props))
-        # 复用：同一个子组件实例 + 同一棵子树（DOM、state、Effect 全保留）。
-        # props 就地更新；结构是否变化交给子组件自己的 view Effect 重跑去调和。
         child = existing.rendered_component
         child.update_props(child_props) if component.is_a?(Class) && child.respond_to?(:update_props)
-        existing.block_effect&.run
-        return existing
+        return refresh_component_view(existing, child, identity, key, child_props)
       end
 
       child = component.is_a?(Class) ? klass.new(child_props) : component
-      boundary = Node.new(:component, { key: key }.compact, nil, owner: child, virtual: true)
-      boundary.reuse_key = key
-      boundary.identity = identity
-      boundary.rendered_component = child
-      boundary.props = child_props
-      child.root = boundary if child.respond_to?(:root=)
-      child.renderer = self if child.respond_to?(:renderer=)
-
-      @parents.last.children << boundary
-      @parents.push(boundary)
-      begin
-        run_view(boundary, child)
-      ensure
-        @parents.pop
-      end
-
-      finalize(boundary)
-
+      node = capture_component_root(child)
+      adopt_root(node, child, identity, key, child_props)
       register_window_keys(child)
       child.run_mount_hooks if child.respond_to?(:run_mount_hooks)
-      boundary
+      node
+    end
+
+    # 跑一次子组件 view，要求恰好产出一个根节点，并返回它（已挂在当前父下）
+    def capture_component_root(child)
+      parent = @parents.last
+      before = parent.children.size
+      child.instance_exec { view }
+      added = parent.children[before..] || []
+      unless added.size == 1
+        names = added.map { |n| n.type }.join(", ")
+        raise "Citrine.render：子组件的 view 必须渲染**恰好一个**根节点，" \
+              "实际 #{added.size} 个（#{names.empty? ? '无' : names}）；多根或纯文本请自行包一层 stack { }"
+      end
+
+      added.first
+    end
+
+    # 把一个真实节点标记为"某子组件的根"（复用 / 卸载 / 生命周期都以它为单位）
+    def adopt_root(node, child, identity, key, child_props)
+      node.rendered_component = child
+      node.component_identity = identity # 注意：不覆盖 identity（它仍是该元素的元素身份）
+      node.reuse_key = key
+      node.component_props = child_props
+      child.root = node if child.respond_to?(:root=)
+      child.renderer = self if child.respond_to?(:renderer=)
+      node
+    end
+
+    # 复用：重跑子组件 view，把输出调和回既有根节点；根节点换了类型就换新（返回新节点）
+    def refresh_component_view(node, child, identity, key, child_props)
+      parent = @parents.last
+      @reuse_pools.push(ReusePool.new([node]))
+      parent.children.delete(node) # view 重跑时会按位置把它重新计入
+      refreshed = begin
+        capture_component_root(child)
+      ensure
+        @reuse_pools.pop
+      end
+
+      if refreshed.equal?(node)
+        node.component_props = child_props
+        node
+      else
+        dispose(node) # 旧根整棵卸载；组件实例本身不重建，所以不重跑 mount 钩子
+        adopt_root(refreshed, child, identity, key, child_props)
+        refreshed
+      end
     end
 
     # 复用匹配：key 优先，没有 key 时按"本次第几个子节点"对位（React 的隐含位置 key）。
@@ -169,7 +196,7 @@ module Citrine
 
       # 复用的节点要重新计入当前父的子节点表（本轮开始时已清空），顺序由追加次序决定
       @parents.last.children << node
-      attach(node, attach_target) unless node.virtual?
+      attach(node, @parents.last)
       node
     end
 
@@ -178,7 +205,7 @@ module Citrine
     def refresh_node(node, props, block)
       node.props = props
       node.block = block
-      apply_props(node) unless node.virtual?
+      apply_props(node)
       node.props_effect&.run
       node.block_effect&.run
       node
@@ -208,10 +235,6 @@ module Citrine
 
       result = yield
       if !result.nil? && node.children.empty?
-        if node.virtual?
-          raise "Citrine.render：子组件的 view 必须渲染元素节点（返回了 #{result.class}）；" \
-                "纯文本请包进 label { … } 之类"
-        end
         warn_nonstring(node, result) unless result.is_a?(String)
         set_text(node, result)
       end
@@ -234,17 +257,25 @@ module Citrine
       end
 
       # key 优先；没有 key 时按"本次第几个子节点"对位匹配（React 的隐含位置 key）。
+      # 同一个节点有两种身份：元素身份（自身）与组件根身份（它是某子组件的根）——
+      # 父组件按组件身份匹配、子组件 view 重跑时按元素身份匹配，两者指向同一节点。
       def take(key, identity, props)
         @cursor += 1
-        if key
-          register!(key)
-          candidate = @keyed[key]
-        else
-          candidate = @all[@cursor - 1]
-        end
-        return nil unless candidate && candidate.identity == identity
+        candidate = if key
+                      register!(key)
+                      @keyed[key]
+                    else
+                      @all[@cursor - 1]
+                    end
+        return nil unless candidate
         return nil if @taken.key?(candidate.object_id)
-        return nil unless same_props?(candidate.props, props)
+
+        expected = if identity.first == :component
+                     candidate.component_identity == identity ? candidate.component_props : nil
+                   else
+                     candidate.identity == identity ? candidate.props : nil
+                   end
+        return nil unless expected && same_props?(expected, props)
 
         @taken[candidate.object_id] = candidate
         candidate
@@ -300,13 +331,7 @@ module Citrine
         child.run_unmount_hooks if child.respond_to?(:run_unmount_hooks)
       end
 
-      detach(node) unless node.virtual?
-    end
-
-    # 虚拟节点（组件边界）不产生平台元素：它的后代挂到最近的"真实"祖先上
-    def attach_target
-      @parents.reverse_each { |node| return node unless node.virtual? }
-      nil
+      detach(node)
     end
 
     # box 支持布局快捷参数：direction（stack/flow 的抽象）、gap

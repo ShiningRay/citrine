@@ -9,8 +9,8 @@ module Citrine
     attr_accessor :dom, :text
     # 上一次应用过的内联样式键：响应式 style 变化时用来清掉已消失的键
     attr_accessor :applied_style_keys
-    # keyed 复用的身份：显式 key + 身份标签（元素类型 / 组件类）
-    attr_accessor :reuse_key, :identity
+    # keyed 复用的身份：显式 key + 身份标签（元素类型）+ 组件根身份（若它是某子组件的根）
+    attr_accessor :reuse_key, :identity, :component_identity, :component_props
     # 组件边界节点：由 `render(Child)` 产生，承载子组件 view 的输出。
     # 它自己不对应任何 DOM/画布元素（虚拟节点），只提供"一块可整体复用、整体销毁的区域"。
     attr_accessor :rendered_component
@@ -19,17 +19,13 @@ module Citrine
     # 已绑定的事件监听（DOM 渲染器用；复用时先解绑再按新 props 重绑）
     attr_accessor :bound_listeners
 
-    def initialize(type, props = {}, block = nil, owner: nil, virtual: false)
+    def initialize(type, props = {}, block = nil, owner: nil)
       @type = type
       @props = props
       @block = block
       @owner = owner
       @children = []
       @owned_effects = []
-      @virtual = virtual
     end
-
-    # 虚拟节点：不产生平台元素（组件边界；将来 fragment 也走它）
-    def virtual? = @virtual
   end
 end

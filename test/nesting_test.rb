@@ -259,7 +259,7 @@ end
     root = mount(parent)
     row = find_all(root, "row").last
     # 通过边界节点拿到子组件实例，再走它的回调路径（DOM 事件本身由桩/真机覆盖）
-    child = boundaries(root).last.rendered_component
+    child = component_roots(root).last.rendered_component
 
     child.handle_event(child.props[:on_pick], "C")
 
@@ -340,9 +340,9 @@ end
     assert_includes collect_texts(root), "x"
   end
 
-  def test_nested_view_must_render_elements
+  def test_nested_view_must_render_exactly_one_root
     error = assert_raises(RuntimeError) { mount(StringViewParent.new) }
-    assert_match(/必须渲染元素节点/, error.message)
+    assert_match(/恰好一个/, error.message)
   end
 
   def test_render_outside_view_raises
@@ -407,10 +407,10 @@ end
     find_all(node, class_name).first
   end
 
-  # 组件边界节点（虚拟节点）：type == :component
-  def boundaries(node, acc = [])
-    acc << node if node.type == :component
-    node.children.each { |child| boundaries(child, acc) }
+  # 子组件的根节点：带 rendered_component 标记的真实节点
+  def component_roots(node, acc = [])
+    acc << node if node.rendered_component
+    node.children.each { |child| component_roots(child, acc) }
     acc
   end
 end
