@@ -10,10 +10,10 @@ class Counter < Citrine::Component
   computed(:double) { count * 2 }
 
   def view
-    box(direction: :column, gap: 10, style: { padding: "20px", font_family: "sans-serif", width: "340px" }) do
+    stack(gap: 10, style: { padding: "20px", font_family: "sans-serif", width: "340px" }) do
       label(style: { font_size: "22px", font_weight: "600" }) { title }
       label(style: { font_size: "18px" }) { "count = #{count}　×2 = #{double}" }
-      box(direction: :row, gap: 8) do
+      row(gap: 8) do
         button(on_click: :increment) { "＋1" }
         button(on_click: :decrement) { "－1" }
         button(on_click: :reset) { "重置" }
@@ -143,9 +143,9 @@ class SelectionGrid < Citrine::Component
   state :selected, default: 0
 
   def view
-    box(direction: :column, gap: 8, style: { font_family: "sans-serif", width: "360px" }) do
+    stack(gap: 8, style: { font_family: "sans-serif", width: "360px" }) do
       label(style: { font_size: "16px", font_weight: "600" }) { "选中：格 #{selected}" }
-      box(direction: :row, gap: 6) do
+      row(gap: 6) do
         CELLS.each do |i|
           box(
             css_class: -> { i == selected ? "cell on" : "cell" },

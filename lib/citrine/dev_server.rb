@@ -221,7 +221,8 @@ module Citrine
     end
 
     def inject_client(html)
-      script = %(<script src="/__rv_client.js"></script>)
+      # CITRINE_DEV：开发模式标志（布局提醒等只在开发期输出；生产构建不注入）
+      script = %(<script>window.CITRINE_DEV = true;</script>\n<script src="/__rv_client.js"></script>)
       return html.sub("</head>", "#{script}</head>") if html.include?("</head>")
 
       html.sub("</body>", "#{script}</body>")

@@ -9,6 +9,15 @@ module Citrine
     # 当前渲染器（由具体平台入口设置，如 citrine/dom.rb 的 DomRenderer）
     attr_accessor :renderer
 
+    # 开发模式：只影响提示/诊断输出，不改变渲染语义。
+    # `bin/citrine dev` 打开的页面由 dev_server 注入 window.CITRINE_DEV 自动置位；
+    # CRuby 侧（SSR / 单测）可用 `Citrine.dev_mode = true` 手动打开。
+    attr_writer :dev_mode
+
+    def dev_mode?
+      !!@dev_mode
+    end
+
     def mount(component, element)
       raise "Citrine.renderer 未设置（浏览器入口应 require \"citrine/browser\"）" unless renderer
 

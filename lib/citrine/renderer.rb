@@ -37,10 +37,12 @@ module Citrine
       # 响应式 Effect 重跑发生在 mount 之后，也依赖此设置，
       # 因此不恢复旧值——"活动渲染器 = 最近挂载的那个"。
       Citrine.renderer = self
+      @undirected_boxes = 0
       root = Node.new(:root, {}, nil, owner: component)
       setup_root(root, element)
       run_view(root, component)
       finalize(root)
+      warn_undirected_boxes
       root
     end
 
@@ -76,6 +78,8 @@ module Citrine
           run_block(node) { node.owner.instance_exec(&node.block) }
         end
       end
+      # 子节点此时才建好：多子容器才会真的"塌"，所以放在 block 之后统计（G-8）
+      note_undirected_box(node)
       finalize(node)
       node
     end
@@ -177,6 +181,27 @@ module Citrine
         warn "[citrine] #{node.type} 的 prop :#{key} 收到 Proc，但它不是响应式属性：" \
              "Proc 不会被求值。支持 Proc 的只有 #{REACTIVE_PROPS.map { |k| ":#{k}" }.join(' / ')}；#{hint}"
       end
+    end
+
+    # ── 布局提醒（G-8）────────────────────────────────────
+
+    # 未显式声明方向、且**有多个子节点**的 box 计数：默认 row 是"面板塌成一条"那类
+    # 真机事故的根源（桩里没有布局引擎，测不出来），开发模式下按页汇报一次。
+    # 空容器/单子容器不会塌，不提醒——避免用噪音换信任。
+    def note_undirected_box(node)
+      return unless node.type == :box && !node.props.key?(:direction) && node.children.size > 1
+
+      @undirected_boxes = (@undirected_boxes || 0) + 1
+    end
+
+    def warn_undirected_boxes
+      count = @undirected_boxes.to_i
+      @undirected_boxes = 0
+      return if count.zero? || !Citrine.dev_mode? || !respond_to?(:warn, true)
+
+      warn "[citrine] 本次挂载有 #{count} 处 box 未声明方向（默认横排 row；内容一多，真机上会塌成一条）：" \
+           "竖排请写 stack { }，横排请写 row { }（等价于 box(direction: :column|:row)）。" \
+           "本提示只在开发模式出现。"
     end
 
     # ── 平台钩子 ───────────────────────────────────────────

@@ -173,6 +173,33 @@ class MemoryRenderTest < Minitest::Test
     assert_match(/不是响应式属性/, err)
     assert_match(/value: signal\(:draft\)/, err)
   end
+
+  # ── G-8：布局语法糖 + 未声明方向的开发期提醒 ──────────────────
+
+  def test_undirected_box_warns_in_dev_mode_with_count
+    Citrine.dev_mode = true
+    _out, err = capture_io { MemoryRenderer.new.mount_component(UndirectedBoxWidget.new, FakeDom.new) }
+
+    assert_match(/1 处 box 未声明方向/, err)
+    assert_match(/stack \{ \}/, err)
+  ensure
+    Citrine.dev_mode = false
+  end
+
+  def test_undirected_box_is_silent_outside_dev_mode
+    _out, err = capture_io { MemoryRenderer.new.mount_component(UndirectedBoxWidget.new, FakeDom.new) }
+
+    assert_empty err
+  end
+
+  def test_stack_and_row_sugar_is_not_reported
+    Citrine.dev_mode = true
+    _out, err = capture_io { MemoryRenderer.new.mount_component(LayoutSugarWidget.new, FakeDom.new) }
+
+    assert_empty err
+  ensure
+    Citrine.dev_mode = false
+  end
 end
 
 # 响应式属性测试用组件：两个 label 各带一个 Proc 属性，view_runs 用来证明
@@ -216,6 +243,23 @@ class ValueProcWidget < Citrine::Component
   end
 end
 
+# G-8：外层 box 有两个子节点且未声明方向（应被计为 1 处）；内层是单子容器，不算
+class UndirectedBoxWidget < Citrine::Component
+  def view
+    box do
+      label { "a" }
+      label { "b" }
+    end
+  end
+end
+
+# G-8：语法糖——方向显式，不应触发提醒
+class LayoutSugarWidget < Citrine::Component
+  def view
+    stack(gap: 4) { row(gap: 2) { label { "x" } } }
+  end
+end
+
 class CamelCompatWidget < Citrine::Component
   def view
     box(style: { padding: "4px" }) do
@@ -241,6 +285,26 @@ class RenderTest < Minitest::Test
     styled = Citrine.render(StyleProcWidget.new)
     assert_includes styled, "background:#ffeeee"
     assert_includes styled, "padding:4px"
+  end
+
+  # G-8：布局语法糖（stack=竖排 / row=横排）在 SSR 侧同样生效
+  def test_stack_and_row_sugar_render_flex_direction
+    html = Citrine.render(LayoutSugarWidget.new)
+
+    assert_includes html, "flex-direction:column"
+    assert_includes html, "flex-direction:row"
+    assert_includes html, "gap:4px"
+  end
+
+  def test_stack_rejects_explicit_direction
+    widget = Class.new(Citrine::Component) do
+      def view
+        stack(direction: :row) { label { "x" } }
+      end
+    end
+
+    error = assert_raises(ArgumentError) { Citrine.render(widget.new) }
+    assert_match(/已隐含方向/, error.message)
   end
 
   def test_css_class_rendered
