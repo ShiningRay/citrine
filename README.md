@@ -199,6 +199,11 @@ ruby -run -e httpd . -p 4401
    成因是 `opal/corelib/number.rb` 的 `Integer#**` 把 `other > 0` 当成了"整数快路径"的条件
    ——指数为 0 也被归进负指数（Rational）分支。`Citrine::Num` 内部已绕开；
    上游修复已另提（同 `Float#round` 的处置路径）。
+10. **给固定 arity 的方法多传实参，Opal 不报错只是静默丢弃**：`on_mount :a, :b` 在 CRuby 抛
+    `ArgumentError`，在 Opal 下不报错、**只跑第一个**——表现为"某个副作用凭空消失"
+    （dogfooding 实测：网格 ticker 没了，症状是闪烁永不清零，排查成本极高）。框架的
+    生命周期宏已改成可变参数；写自己的宏/方法时也要注意：**别依赖"多传会报错"来兜底**，
+    Opal 下这类错误不会浮出来。根治办法是让签名接收可变参数并自己校验实参。
 
 ### 框架备忘
 
