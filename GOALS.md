@@ -286,6 +286,27 @@ end
 订阅，写入时只重跑该 block、只更新对应节点。Ruby block 比 JSX 更适合
 承载此模型。
 
+### 响应式属性（G-2，2026-09-14 增补）
+
+`view` 只执行一次，但 **props 的实参在外层块执行期间求值**——于是"谁传参，谁的 Effect 就订阅"。
+`box(css_class: cell_class(row, col))` 会让外层块订阅这一格的信号：改一格重建整块。
+这是块级重建模型里最不可见的一处性能悬崖（写起来毫无差别）。
+
+约定：**值写成 Proc 即声明"这是响应式属性"**，渲染器在该节点自己的 Effect 内求值：
+
+```ruby
+box(
+  css_class: -> { i == selected ? "cell on" : "cell" },
+  style:     -> { { background: i == selected ? "#fde68a" : "#f1f5f9" } }
+) { label { "格 #{i}" } }
+```
+
+- 订阅范围收敛到该节点；重跑**只重设属性、不重建子树**（子树重建仅由 block 的 Effect 负责）
+- 支持 Proc 的 prop 白名单：`css_class` / `placeholder` / `style` / `direction` / `gap`
+- `on_*` 收到的 Proc 是**回调**，不在此列（语义不同，不歧义）
+- 平台边界：DOM 幂等重设属性（事件绑定拆到 `bind_events`，避免重复挂监听）；SSR 只求值一次；
+  Canvas 在绘制时求值。响应式 `style` 换掉整份内联样式，消失的键会被显式清空（错误态高亮必须能消失）
+
 ### 命名约定（决策 #10，2026-09-14 补充）
 
 DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
@@ -368,6 +389,7 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 | 2026-09-14 | **摩擦记录驱动修复（→0.1.1）**：citrine-market-terminal dogfooding 产生 FRICTION.md（23 项 + 20 个静默失败入口审计）；本轮落地 F1（Effect dispose 守卫，已验证在先）+ F2 最小修复（mount_at 复用渲染器 / 可读异常）+ F16（非字符串 to_s 渲染+提醒）+ F17（样式单位推断 + nil 剔除）+ F19（Signal 驱动 checkbox）+ F20（字面量初值）；F12-F14 写入 README 备忘；FRICTION.md 增加响应状态表。测试 23 项 / 83 断言全绿 + 四桩 | dogfooding 证明内核语义成立、摩擦集中在更新粒度 / 组合缺失 / 静默失败三个边界；P0 剩余（F3 批量更新 / F4 props 重应用）为下一优先 |
 | 2026-09-14 | **GitHub 化 + CI 全绿**：推送至 github.com/ShiningRay/citrine（public）；GitHub Actions 三件套——CI（Ruby 3.1-3.4 矩阵 + 编译/四桩 + macOS 打包冒烟）、Release（v* 标签构建 gem 附 Release，RUBYGEMS_API_KEY 配置后自动 push）、Dependabot（bundler + actions 周更）；附 Rakefile（test/stubs 任务） | Roadmap P2-10/11 提前落地；修复：CI 上打包需 bundle exec 解析 opal 可执行文件 |
 | 2026-09-14 | **仓库化 + gem 0.1.0**：代码迁入独立 citrine/ 仓库（git init，首次提交 41 文件），gemspec + version + MIT LICENSE + .gitignore 就绪，`gem build` 通过（citrine-0.1.0.gem，21.5KB，未发布）；决策 #7 包结构定案：v1 单 gem，**npm 不做** | 源语言 Ruby → RubyGems 为唯一分发渠道；npm 的唯一例外是 P1 运行时拆分时的 citrine-runtime 预编译资产 |
+| 2026-09-14 | **响应式属性（G-2）落地**：props 的值传 Proc 即声明"响应式属性"，在该节点自己的 Effect 内求值（白名单 `css_class`/`placeholder`/`style`/`direction`/`gap`）；DOM 侧 `apply_props` 改为幂等、事件绑定拆到新钩子 `bind_events`，重跑只重设属性、不重建子树；消失的内联样式键显式清空；SSR 只求值一次，Canvas 绘制时求值。新增示例 `reactive_props` + 12 项桩断言（含"兄弟/目标 DOM 未被重建"） | 第二辑 FRICTION（电子表格 dogfooding）的 P0：props 求值位置决定订阅范围，一处看不见的 5~10 倍重绘；Roadmap P0-1 的"props 响应式传播"由此先行落地，嵌套/keyed 复用仍待做 |
 
 ## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
 
@@ -381,6 +403,8 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
    - **keyed 实例复用**：父块重建时按 key 复用子组件实例，否则状态全丢；
    - **props 响应式传播**：props 从"创建时快照"升级为可更新（父重传 →
      子组件读取 props 的块失效重跑）。这三个子问题本质上是同一件事。
+     *（2026-09-14 部分落地：见第七节"响应式属性"——节点自身的值可响应；
+     跨组件 props 重传仍待做）*
 2. **生命周期宏**：兑现第七节承诺的 `effect` / `watch` / `on_mount` /
    `on_unmount`（当前只实现了 state / computed 两宏）。
 3. **响应式集合**：ReactiveArray / ReactiveHash（`items << x` 直接触发），

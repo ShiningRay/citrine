@@ -2,6 +2,7 @@
 /build/
 /examples/counter.js
 /examples/todo.js
+/examples/reactive_props.js
 /examples/canvas_counter.js
 /examples/canvas_todo.js
 *.gem

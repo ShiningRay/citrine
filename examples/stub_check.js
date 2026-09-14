@@ -1,8 +1,8 @@
 // stub_check.js — Node DOM 桩验收 M1 示例（不起浏览器）
-// 用法: node stub_check.js counter | node stub_check.js todo
+// 用法: node stub_check.js counter | todo | reactive_props
 const which = process.argv[2];
-if (!["counter", "todo"].includes(which)) {
-  console.error("用法: node stub_check.js counter|todo");
+if (!["counter", "todo", "reactive_props"].includes(which)) {
+  console.error("用法: node stub_check.js counter|todo|reactive_props");
   process.exit(2);
 }
 
@@ -61,6 +61,30 @@ if (which === "counter") {
 
   findButton(app, "重置").fire("click");
   assert("重置", value(), "count = 0　×2 = 0");
+} else if (which === "reactive_props") {
+  // 响应式属性（G-2）：点格子只重设两格属性，DOM 节点零重建
+  const cells = () => findAll(app, "div").filter((d) => (d.className || "").startsWith("cell"));
+  const status = () => texts(app).find((t) => t.startsWith("选中"));
+
+  assert("初始 5 格", cells().length, 5);
+  assert("初始状态文本", status(), "选中：格 0");
+  assert("初始选中格类名", cells()[0].className, "cell on");
+  assert("初始选中格样式", cells()[0].style.background, "#fde68a");
+
+  const before = cells();
+  cells()[2].fire("click");
+  const after = cells();
+
+  assert("点击后状态文本更新", status(), "选中：格 2");
+  assert("新选中格类名", after[2].className, "cell on");
+  assert("原选中格类名复原", after[0].className, "cell");
+  assert("新选中格样式更新", after[2].style.background, "#fde68a");
+  assert("原选中格样式复原", after[0].style.background, "#f1f5f9");
+  assert("兄弟格 DOM 未被重建", after[1] === before[1] && after[3] === before[3] && after[4] === before[4], true);
+  assert("目标格 DOM 未被重建（只重设属性）", after[2] === before[2], true);
+  assert("整棵子树节点数不变", after.length, before.length);
+  assert("旧格消失的样式键被清空", after[0].style.boxShadow, "");
+  assert("新选中格拿到描边", after[2].style.boxShadow, "0 0 0 2px #f59e0b");
 } else {
   const summary = () => texts(app).find((t) => t.startsWith("待办"));
   const input = findAll(app, "input").find((i) => i._listeners.input);

@@ -146,7 +146,10 @@ module Citrine
     end
 
     def emit(type, props, &block)
-      props = props.merge(style: Style.normalize(props[:style])) if props[:style]
+      # 样式在 API 边界归一（决策 #10）；Proc 样式是响应式属性，求值后归一（Renderer#resolve_style）
+      if props[:style] && !props[:style].is_a?(Proc)
+        props = props.merge(style: Style.normalize(props[:style]))
+      end
       node = Node.new(type, props, block, owner: self)
       Citrine.renderer.mount(node)
       node

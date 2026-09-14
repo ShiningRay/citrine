@@ -6,6 +6,8 @@ module Citrine
   class Node
     attr_reader :type, :props, :block, :owner, :children, :owned_effects
     attr_accessor :dom, :text
+    # 上一次应用过的内联样式键：响应式 style 变化时用来清掉已消失的键
+    attr_accessor :applied_style_keys
 
     def initialize(type, props = {}, block = nil, owner: nil)
       @type = type

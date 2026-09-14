@@ -57,12 +57,14 @@ module Citrine
 
     def attributes(node)
       out = []
-      out << %(class="#{node.props[:css_class]}") if node.props[:css_class]
+      # 响应式属性在 SSR 侧只求值一次（无订阅、无重跑，与 DOM 输出保持一致）
+      css_class = prop_value(node, node.props[:css_class])
+      out << %(class="#{css_class}") if css_class
       case node.type
       when :text_input
         out << 'type="text"'
-        if node.props[:placeholder]
-          out << %(placeholder="#{escape_html(node.props[:placeholder])}")
+        if (placeholder = prop_value(node, node.props[:placeholder]))
+          out << %(placeholder="#{escape_html(placeholder)}")
         end
         value = node.props[:value]
         value = value.get if value.is_a?(Signal)

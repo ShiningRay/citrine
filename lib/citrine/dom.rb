@@ -44,16 +44,26 @@ module Citrine
       parent_dom.removeChild(node.dom) if parent_dom
     end
 
+    # 幂等：响应式属性重跑时会再次调用（见 Renderer#mount）
     def apply_props(node)
       el = node.dom
-      el[:className] = node.props[:css_class] if node.props[:css_class]
-      el[:placeholder] = node.props[:placeholder] if node.props[:placeholder]
-      resolve_style(node).each { |key, value| el[:style][Style.camel(key)] = value.to_s }
+      if node.props.key?(:css_class)
+        el[:className] = prop_value(node, node.props[:css_class]).to_s
+      end
+      el[:placeholder] = prop_value(node, node.props[:placeholder]).to_s if node.props.key?(:placeholder)
 
+      style = resolve_style(node)
+      # 响应式 style 换掉整份内联样式：先清掉本次不再出现的旧键（错误态高亮必须能消失）
+      track_style_keys(node, style.keys).each { |key| el[:style][Style.camel(key)] = "" }
+      style.each { |key, value| el[:style][Style.camel(key)] = value.to_s }
+    end
+
+    # 事件监听只在挂载时绑定一次（不参与响应式属性重跑）
+    def bind_events(node)
       handler = node.props[:on_click]
       return unless handler
 
-      el.addEventListener("click", ->(event) {
+      node.dom.addEventListener("click", ->(event) {
         node.owner.handle_event(handler, Native(event))
       })
     end

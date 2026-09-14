@@ -53,6 +53,11 @@ module Citrine
 
     def apply_props(_node); end
 
+    # 响应式属性（G-2）：Canvas 每次重绘都重新读 props，Proc 在绘制时求值
+    def style_of(node)
+      prop_value(node, node.props[:style]) || {}
+    end
+
     def set_text(node, text)
       node.text = text
     end
@@ -91,7 +96,7 @@ module Citrine
     end
 
     def dispatch_text_input(node)
-      text = prompt_value(node.props[:placeholder].to_s)
+      text = prompt_value(prop_value(node, node.props[:placeholder]).to_s)
       return if text.nil?
 
       value = node.props[:value]
@@ -122,10 +127,10 @@ module Citrine
     end
 
     def box_axes(node)
-      style = node.props[:style] || {}
+      style = style_of(node)
       pad = px_num(node.type == :root ? (style[:padding] || 12) : (style[:padding] || 0))
-      gap = node.props[:gap] ? node.props[:gap].to_i : 10
-      direction = if node.type == :root || node.props[:direction] == :column
+      gap = (gap_prop = prop_value(node, node.props[:gap])) ? gap_prop.to_i : 10
+      direction = if node.type == :root || prop_value(node, node.props[:direction]) == :column
                     :column
                   else
                     :row
@@ -189,7 +194,7 @@ module Citrine
       when :root
         node.children.each { |child| paint(child) }
       when :box
-        style = node.props[:style] || {}
+        style = style_of(node)
         bg = style[:background] || style[:background_color]
         # 渐变等复杂值在 Canvas 上跳过（仅支持纯色），避免污染当前 fillStyle
         if bg.is_a?(String) && bg.start_with?("#", "rgb")
@@ -209,7 +214,7 @@ module Citrine
     end
 
     def paint_label(node)
-      style = node.props[:style] || {}
+      style = style_of(node)
       text = display_text(node)
       color = style[:color] || "#222"
       @ctx.font = font_string(node)
@@ -250,7 +255,7 @@ module Citrine
       @ctx.font = "15px sans-serif"
       if value.empty?
         @ctx.fillStyle = "#999"
-        @ctx.fillText(node.props[:placeholder].to_s, box[:x] + 8, box[:y] + 23)
+        @ctx.fillText(prop_value(node, node.props[:placeholder]).to_s, box[:x] + 8, box[:y] + 23)
       else
         @ctx.fillStyle = "#222"
         @ctx.fillText(value[0, 20], box[:x] + 8, box[:y] + 23)
@@ -279,11 +284,11 @@ module Citrine
     end
 
     def font_size(node)
-      px_num((node.props[:style] || {})[:font_size] || 16)
+      px_num(style_of(node)[:font_size] || 16)
     end
 
     def font_string(node)
-      weight = (node.props[:style] || {})[:font_weight]
+      weight = style_of(node)[:font_weight]
       size = font_size(node)
       if weight && weight.to_s != "400"
         "#{weight} #{size}px sans-serif"

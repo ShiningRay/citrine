@@ -111,6 +111,7 @@ v1 已知限制：列表为块级整体重建（无 keyed 复用）；集合为�
 │   ├── components.rb     # 共享组件（四个后端复用同一份代码）
 │   ├── counter.rb|html   # M1 示例：state / computed / 事件（DOM）
 │   ├── todo.rb|html      # M1 示例：列表 / 受控输入 / 勾选 / 删除（DOM）
+│   ├── reactive_props.rb|html # 响应式属性：props 传 Proc，订阅收敛到节点（G-2）
 │   ├── canvas_counter.rb|html / canvas_todo.rb|html # M3 Canvas 示例
 │   ├── ssr_demo.rb       # M3 示例：CRuby 下 render-to-string
 │   ├── stub_check.js     # Node DOM 桩验收脚本
@@ -170,6 +171,13 @@ ruby -run -e httpd . -p 4401
 
 ### 框架备忘
 
+- **props 的求值位置决定订阅范围（最容易踩的语义）**：`box(css_class: cell_class(row, col))` 的实参在
+  **外层块**执行期间求值，外层块因此订阅了这一格的信号——改一格就整块重建（完全看不出差别，
+  只在渲染量上体现）。把值改成 Proc 就能把订阅收敛到该节点：
+  `box(css_class: -> { cell_class(row, col) })`——它在**该节点自己的 Effect** 内求值，
+  重跑只重设属性、不重建子树。支持 Proc 的 prop：`css_class` / `placeholder` / `style` /
+  `direction` / `gap`；事件 `on_*` 收到的 Proc 是**回调**，不在此列（示例
+  `examples/reactive_props.rb`，桩验收 `node stub_check.js reactive_props`）。
 - Opal 1.8.3：backtick 内嵌 JS 需要 `# backtick_javascript: true` magic comment
 - `Native` / `to_n` 需要 `require "native"`（Opal stdlib）；Ruby String 可直接传给 JS 函数
 - 带参数的方法调用接 `{}` block 必须写括号：`computed(:x) { ... }`（否则被解析为 Hash）
