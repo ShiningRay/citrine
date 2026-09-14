@@ -149,6 +149,10 @@ module Citrine
           state[f] = File.mtime(f).to_f
         end
       end
+      # S2-5：样式表也是热刷新对象——改 .css 同样通知浏览器刷新
+      Dir.glob(File.join(@dir, "**", "*.css")).each do |f|
+        state[f] = File.mtime(f).to_f
+      end
       @watched = state
       @key = state.hash.to_s
     end
@@ -240,11 +244,27 @@ module Citrine
     end
 
     def inject_client(html)
+      # S2-5：先把声明的样式资产（<link> / <style>）注入 <head>
+      html = inject_head_assets(html)
       # CITRINE_DEV：开发模式标志（布局提醒等只在开发期输出；生产构建不注入）
       script = %(<script>window.CITRINE_DEV = true;</script>\n<script src="/__rv_client.js"></script>)
       return html.sub("</head>", "#{script}</head>") if html.include?("</head>")
 
       html.sub("</body>", "#{script}</body>")
+    end
+
+    # S2-5：样式资产注入——Citrine.css 声明的样式表（<link>）与
+    # Citrine.css_text 自定义样式文本（<style>，媒体查询/伪类的逃生舱）。
+    # 纯函数（便于单测）：只改传入的 html，不读文件系统。
+    def inject_head_assets(html)
+      assets = Citrine.css_files.map { |f| %(<link rel="stylesheet" href="/#{f}">) }
+      assets << "<style>#{Citrine.css_text}</style>" if Citrine.css_text && !Citrine.css_text.empty?
+      return html if assets.empty?
+
+      block = assets.join("\n")
+      return html.sub("</head>", "#{block}\n</head>") if html.include?("</head>")
+
+      html.sub("</body>", "#{block}\n</body>")
     end
 
     def sse(sock)

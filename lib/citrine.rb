@@ -79,6 +79,7 @@ module Citrine
 end
 
 require_relative "citrine/version"
+require_relative "citrine/theme"
 require_relative "citrine/signal"
 require_relative "citrine/list_signal"
 require_relative "citrine/reactive"

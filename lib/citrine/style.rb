@@ -33,6 +33,7 @@ module Citrine
 
       style.each_with_object({}) do |(key, value), out|
         key = underscore(key)
+        value = resolve_theme_ref(value)
         value = normalize_value(value)
         next if value.nil? # F17：nil 值剔除而非输出非法 CSS
         if value.is_a?(Numeric) && PX_PROPERTIES.include?(key) && !UNITLESS_PROPERTIES.include?(key)
@@ -40,6 +41,15 @@ module Citrine
         end
         out[key] = value
       end
+    end
+
+    # 主题 token 引用（S2-5）→ 主题值。token 值还可以再引用 token
+    # （有深度上限防循环引用）；解析后的数值走同一套 px 推断
+    def resolve_theme_ref(value, depth = 0)
+      return value unless value.is_a?(Theme::Ref)
+      raise ArgumentError, "主题 token 嵌套过深（疑似循环引用）" if depth > 8
+
+      resolve_theme_ref(Theme.resolve!(value), depth + 1)
     end
 
     # fontSize / font_size / :fontSize → :font_size
