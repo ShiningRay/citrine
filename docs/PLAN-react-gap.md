@@ -19,14 +19,20 @@
     量测文本宽度（字体回退/CJK 度量交给浏览器），无 body 环境回退 measureText；text_input 换成
     真实 <input> 覆盖层（value 信号双向绑定、中文输入法可用，无覆盖层环境回退 prompt）；
     `rake canvas_parity` 等价断言（同一 Counter 组件双渲染器：文本序列等价 / DOM·Canvas 尺寸下限 /
-    列向兄弟 top 递增 / 覆盖层输入写回 Signal）并接入 CI browser job。IME 人工验收留待真机确认。
-  - **T-B3 已落地**（数据层 `2287fb9`：Citrine.debug_dependency_graph 导出 signal→effect 边与重跑计数；
+    列向兄弟 top 递增 / 覆盖层输入写回 Signal）并接入 CI browser job。IME 人工验收方法：
+    `bin/citrine dev examples` → 打开 props_widgets.html → 用中文输入法在输入框输入候选词 →
+    确认选词回车不误触发 on_enter、上屏内容与草稿一致（自动化覆盖：isComposing 守卫与
+    覆盖层双向绑定已由 props_widgets 桩断言）。
+  - **工具链线 T-B3 已落地**（数据层 `2287fb9`：Citrine.debug_dependency_graph 导出 signal→effect 边与重跑计数；
+    生产断言 `621c44c`：rake prod_check 断言不 require citrine/debug 的产物不含埋点字符串；
     还原工具 `dcc8e3d`：Citrine::SourceMap 兼容 indexed map，端到端测试验证 Node 抛错栈位置
-    可还原到 .rb 第 3 行）。Sentry 真实上报接入与 Cytoscape UI 为后续工作（需外部账号/资源）。
-  - **T-B4 待产品决策**（计划 D6 明确"产品先决定是否跨平台"）：维持 macOS .app 打包现状；
+    可还原到 .rb 第 3 行）。剩余：Sentry 真实上报接入（需 Sentry 账号与 DSN）、Cytoscape UI。
+  - **T-B4 待产品决策**（计划 D6 明确"产品先决定是否跨平台"，已向用户提出 macOS-only / Tauri v2 /
+    Capacitor v8 选择，等待决策）：维持 macOS .app 打包现状；
     签名/公证验收（codesign --verify / spctl -a）需 Apple 开发者证书。
   - 验证基线：`bundle exec rake` 232 项 / 738 断言全绿；`rake stubs` 七套全绿；`rake parity`、
-    `rake size`、`rake map_check`、`rake browser`、`rake canvas_parity`、`rake lint` 全绿。
+    `rake size`、`rake map_check`、`rake browser`、`rake canvas_parity`、`rake prod_check`、
+    `rake lint` 全绿。
 - **来源**：源自 2026-09-15 的两轮调研——① 「Citrine vs React 技术栈差距分析」第一、二部分（框架能力）；② 「可借用工具链」调研（构建 / 测试 / 平台运行时，三条并行线，均含本机实测）。本文档只做整理、细化与排序，不新增调研结论；调研与代码不符之处在对应条目内标注并按代码为准。
 - **行号基准**：2026-09-15 的 `fix/s3-leaks-and-ssr-escaping` 分支（提交 `8dfd08a`，父提交 = main `59ad3b0`）。所有 `file:line` 按该次提交的树核对；本文档随后的改动（若有）会让行号漂移，按各条给出的符号名重新定位。
 - **行号会漂移**：S3 修复正在同一工作区并行进行，行号随每次改动偏移。每条引用都同时给出符号名（方法/宏/变量），行号对不上时按符号重新定位；以 `file:line` 为准的判断只对本文档写入时刻的工作区成立。
