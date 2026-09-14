@@ -14,7 +14,7 @@ Gem::Specification.new do |spec|
     "Canvas 与桌面（macOS .app）。水晶振荡器是信号的源头——名字致敬 Opal " \
     "开启的 Ruby→Web 宝石谱系。"
 
-  spec.homepage = "https://github.com/shiningray/citrine" # TODO: 建仓后更新
+  spec.homepage = "https://github.com/ShiningRay/citrine"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.0.0"
 
@@ -23,6 +23,10 @@ Gem::Specification.new do |spec|
   spec.executables = ["citrine"]
   spec.require_paths = ["lib"]
 
+  spec.metadata["source_code_uri"] = spec.homepage
+  spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/GOALS.md"
+
   spec.add_development_dependency "opal", "~> 1.8"
   spec.add_development_dependency "minitest", "~> 5.0"
+  spec.add_development_dependency "rake", "~> 13.0"
 end

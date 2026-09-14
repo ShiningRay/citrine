@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  gem:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+      - name: 构建 gem
+        run: gem build citrine.gemspec
+      - name: 附产物到 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: citrine-*.gem
+      - name: 发布到 RubyGems（需配置 RUBYGEMS_API_KEY secret）
+        env:
+          RUBYGEMS_API_KEY: ${{ secrets.RUBYGEMS_API_KEY }}
+        run: |
+          if [ -n "$RUBYGEMS_API_KEY" ]; then
+            mkdir -p "$HOME/.gem"
+            printf '%%s\n' ":rubygems_api_key: ${RUBYGEMS_API_KEY}" > "$HOME/.gem/credentials"
+            chmod 0600 "$HOME/.gem/credentials"
+            gem push citrine-*.gem
+          else
+            echo "未配置 RUBYGEMS_API_KEY，跳过 gem push（产物已附在 Release 上）"
+          fi
