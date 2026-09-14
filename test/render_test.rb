@@ -130,6 +130,57 @@ class RenderTest < Minitest::Test
     assert_includes html, '<p class="t">'
   end
 
+  def test_numeric_block_result_rendered_via_to_s
+    # F16：非字符串内容按 to_s 渲染，不再静默为空
+    widget = Class.new(Citrine::Component) do
+      def view
+        box do
+          label { 42 }
+          label { items.size }
+        end
+      end
+
+      def items = [1, 2, 3]
+    end
+    html = Citrine.render(widget.new)
+    assert_includes html, "<p>42</p>"
+    assert_includes html, "<p>3</p>"
+  end
+
+  def test_nil_block_result_renders_empty
+    widget = Class.new(Citrine::Component) do
+      def view
+        box { label { nil } }
+      end
+    end
+    assert_includes Citrine.render(widget.new), "<p></p>"
+  end
+
+  def test_style_numeric_px_inference_and_nil_stripping
+    # F17：数值按属性推断单位；nil 值剔除而非输出非法 CSS
+    widget = Class.new(Citrine::Component) do
+      def view
+        box(style: { width: 100, border_radius: 8, flex: 1, opacity: 0.5, color: nil }) do
+          label { "x" }
+        end
+      end
+    end
+    html = Citrine.render(widget.new)
+    assert_includes html, "width:100px"
+    assert_includes html, "border-radius:8px"
+    assert_includes html, "flex:1"
+    assert_includes html, "opacity:0.5"
+    refute_includes html, "color"
+  end
+
+  def test_mount_without_renderer_context_raises_readable_error
+    # F2：无父节点时给出可读异常，而非 nil.children 的裸 NoMethodError
+    err = assert_raises(RuntimeError) do
+      Citrine::StringRenderer.new.mount(Citrine::Node.new(:box, {}, nil, owner: nil))
+    end
+    assert_includes err.message, "没有父节点"
+  end
+
   def test_structure_and_style
     html = Citrine.render(RenderWidget.new)
     assert_includes html, '<div style="display:flex;flex-direction:column;gap:8px">'
