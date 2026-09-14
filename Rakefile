@@ -14,7 +14,7 @@ desc "编译示例并运行 Node 桩验收"
 task :stubs do
   Dir.chdir("examples") do
     # T-A1：产物默认不带内联 source map（约占体积 63%）；调试用 `opal -c -P` 产外置 map
-    %w[counter todo reactive_props keyed_list props_widgets canvas_counter canvas_todo].each do |name|
+    %w[counter todo reactive_props keyed_list props_widgets canvas_wrap canvas_counter canvas_todo].each do |name|
       sh "opal -c --no-source-map -I../lib -I. -o #{name}.js #{name}.rb"
     end
     sh "node stub_check.js counter"
@@ -24,6 +24,7 @@ task :stubs do
     sh "node stub_check.js props_widgets"
     sh "node canvas_stub_check.js counter"
     sh "node canvas_stub_check.js todo"
+    sh "node canvas_stub_check.js wrap"
   end
 end
 

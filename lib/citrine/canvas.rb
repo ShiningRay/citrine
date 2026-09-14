@@ -294,9 +294,48 @@ module Citrine
         # T-B2 spike（隐藏 DOM 测量）：真机里按同一字体用隐藏元素量测宽度——
         # 字体回退 / CJK 度量交给浏览器；Node 桩等无 body 环境回退 measureText。
         width = dom_measurement? ? dom_text_width(text, node) : ctx_text_width(text, node)
-        [width + (node.type == :button ? 24 : 4),
-         font_size(node) * (node.type == :button ? 1.9 : 1.6)]
+        width += node.type == :button ? 24 : 4
+        height = font_size(node) * (node.type == :button ? 1.9 : 1.6)
+
+        # T-B2：显式 style width 且文本超宽 → 贪心断行，多行堆叠
+        max_w = wrap_max_width(node)
+        if max_w && width > max_w
+          lines = wrapped_lines(text, node, max_w)
+          width = max_w
+          height = lines.size * font_size(node) * 1.5
+        end
+        [width, height]
       end
+    end
+
+    # 断行宽度上限：label 的显式 style width
+    def wrap_max_width(node)
+      w = style_of(node)[:width]
+      w ? px_num(w) : nil
+    end
+
+    # 贪心断行：CJK 逐字、拉丁/数字按词、空白串整体。
+    # 返回各行文本；调用方需已设置 @ctx.font（量测用）。
+    def wrapped_lines(text, node, max_width)
+      @ctx.font = font_string(node)
+      lines = []
+      current = ""
+      wrap_units(text).each do |unit|
+        candidate = current + unit
+        if current.empty? || @ctx.measureText(candidate)[:width] <= max_width
+          current = candidate
+        else
+          lines << current
+          current = unit
+        end
+      end
+      lines << current unless current.empty?
+      lines
+    end
+
+    # 分词：拉丁/数字词整体、空白串整体、其余逐字（CJK 逐字断行）
+    def wrap_units(text)
+      text.to_s.scan(/[A-Za-z0-9]+|\s+|[^A-Za-z0-9\s]/)
     end
 
     def ctx_text_width(text, node)
@@ -353,17 +392,24 @@ module Citrine
 
     def paint_label(node)
       style = style_of(node)
-      text = display_text(node)
       color = style[:color] || "#222"
       @ctx.font = font_string(node)
       @ctx.fillStyle = color
-      @ctx.fillText(text, node.dom[:x] + 2, node.dom[:y] + font_size(node) * 1.15)
-      return unless style[:text_decoration] == "line-through"
+
+      # T-B2：多行文本逐行绘制（换行条件与 leaf_size 一致）
+      max_w = wrap_max_width(node)
+      lines = max_w ? wrapped_lines(display_text(node).to_s, node, max_w) : [display_text(node).to_s]
+      line_h = font_size(node) * 1.5
+      lines.each_with_index do |line, i|
+        @ctx.fillText(line, node.dom[:x] + 2, node.dom[:y] + font_size(node) * 1.15 + i * line_h)
+      end
+
+      return unless lines.size == 1 && style[:text_decoration] == "line-through"
 
       y_mid = node.dom[:y] + font_size(node) * 0.75
       @ctx.strokeStyle = color
       @ctx.moveTo(node.dom[:x] + 2, y_mid)
-      @ctx.lineTo(node.dom[:x] + 2 + @ctx.measureText(text)[:width], y_mid)
+      @ctx.lineTo(node.dom[:x] + 2 + @ctx.measureText(lines.first)[:width], y_mid)
       @ctx.stroke
     end
 

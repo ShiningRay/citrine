@@ -10,6 +10,7 @@
 /examples/canvas_todo.js
 /examples/browser_check.js
 /examples/canvas_dom_parity.js
+/examples/canvas_wrap.js
 *.gem
 Gemfile.lock
 

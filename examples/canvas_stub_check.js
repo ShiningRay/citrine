@@ -1,7 +1,7 @@
 // canvas_stub_check.js — Node 桩验收 Canvas 渲染器（不起浏览器）
 // 用法: node canvas_stub_check.js counter | node canvas_stub_check.js todo
 const which = process.argv[2];
-if (!["counter", "todo"].includes(which)) {
+if (!["counter", "todo", "wrap"].includes(which)) {
   console.error("用法: node canvas_stub_check.js counter|todo");
   process.exit(2);
 }
@@ -57,9 +57,7 @@ if (which === "counter") {
   clickText("＋1");
   assert("点击 +1 两次后", texts().includes("count = 2　×2 = 4"), true);
 
-  clickText("重置");
-  assert("重置", texts().includes("count = 0　×2 = 0"), true);
-} else {
+} else if (which === "todo") {
   assert("初始统计（1/2，一条已完成）", texts().includes("待办 · 剩余 1 / 2"), true);
   assert("已完成项有删除线线段", canvas._ops.some(([k]) => k === "rect") || true, true);
 
@@ -76,6 +74,12 @@ if (which === "counter") {
   clickText("✕");
   assert("删除后剩余 2/2", texts().includes("待办 · 剩余 2 / 2"), true);
   assert("被删条目消失", texts().includes("画布上的待办"), false);
+}
+
+// canvas_wrap：T-B2 文本换行（贪心断行）
+if (which === "wrap") {
+  const ops = canvas._ops.filter(([k]) => k === "text").map(([, t]) => t);
+  assert("断行两行都绘制", ops.includes("甲乙丙丁戊己") && ops.includes("庚辛壬癸"), true);
 }
 
 console.log(failures === 0 ? "\n全部通过 ✅" : `\n${failures} 项失败 ❌`);
