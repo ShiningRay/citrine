@@ -194,6 +194,28 @@ module Citrine
         @effect_defs ||= superclass.respond_to?(:effect_defs) ? superclass.effect_defs.dup : []
       end
 
+      # ── 错误边界（S1-6）────────────────────────────────────
+      # 声明本组件的渲染兜底：块 / 子组件 view 在本组件的块里抛错时，
+      # 以异常对象为实参调用兜底，其输出替换该块本轮的内容；
+      # 失败那一轮不留半更新，未声明兜底的组件异常照常穿出。
+      #
+      #   class Panel < Citrine::Component
+      #     error_fallback :render_error
+      #     def render_error(err) = label(css_class: "error") { err.message }
+      #   end
+      def error_fallback(handler = nil, &block)
+        handler = block if handler.nil?
+        raise ArgumentError, "error_fallback 需要方法名或块" unless handler.is_a?(Symbol) || handler.is_a?(Proc)
+
+        @error_fallback = handler
+      end
+
+      def error_fallback_def
+        return @error_fallback if defined?(@error_fallback) && @error_fallback
+
+        superclass.respond_to?(:error_fallback_def) ? superclass.error_fallback_def : nil
+      end
+
       # 声明一个 window 级键盘处理器（Symbol 或 Proc）；卸载时自动解绑。
       # scope: :focused（S2-3）＝焦点落在组件渲染的子树内才分发——同页多个
       # 组件都声明 window_key 时不再一起响应。

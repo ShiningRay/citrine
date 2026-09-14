@@ -352,7 +352,19 @@ module Citrine
       pool = ReusePool.new(previous)
       @reuse_pools.push(pool)
 
-      result = yield
+      result = begin
+        yield
+      rescue StandardError => e
+        raise unless (fallback_owner = fallback_owner_for(node))
+
+        # S1-6：失败那一轮不留半更新——块内本轮产出的节点全部拆掉
+        # （抛错的子组件从未被收编，不会伪装成卸载、不跑 on_unmount），
+        # 然后以异常对象渲染兜底内容
+        node.children.dup.each { |child| dispose(child) }
+        node.children.clear
+        render_error_fallback(fallback_owner, fallback_owner.class.error_fallback_def, e)
+        nil
+      end
       if !result.nil? && node.children.empty?
         warn_nonstring(node, result) unless result.is_a?(String)
         set_text(node, result)
@@ -362,6 +374,22 @@ module Citrine
       @parents.pop
       @reuse_pools.pop
       pool.unused_nodes.each { |old| dispose(old) }
+    end
+
+    # S1-6：本块的 owner 声明了 error_fallback 时，它就是边界组件
+    def fallback_owner_for(node)
+      owner = node.owner
+      owner && owner.class.error_fallback_def ? owner : nil
+    end
+
+    # 异常对象交给兜底分支（Symbol 走 arity 约定，与事件处理器同口径）
+    def render_error_fallback(owner, fallback, error)
+      case fallback
+      when Symbol
+        owner.method(fallback).arity.zero? ? owner.send(fallback) : owner.send(fallback, error)
+      when Proc
+        fallback.arity.zero? ? owner.instance_exec(&fallback) : owner.instance_exec(error, &fallback)
+      end
     end
 
     # keyed 复用的匹配池：一次块执行内，按 key + 身份标签取用旧节点。
