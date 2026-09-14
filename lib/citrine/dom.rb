@@ -58,32 +58,28 @@ module Citrine
       style.each { |key, value| el[:style][Style.camel(key)] = value.to_s }
     end
 
-    # 事件监听只在挂载时绑定一次（不参与响应式属性重跑）。
-    # 注意：每个处理器用独立局部变量——block 捕获的是变量本身，复用变量会让先绑定的
-    # 回调读到后来被覆盖的值（桩验收抓过一次真 bug）。
-    def bind_events(node)
-      owner = node.owner
+# 事件监听：只在挂载时绑一次，且**不捕获处理器值**——事件发生时从 node.props 现取。
+# 这样节点被复用时（P0-1）自动用上新回调，既不需要"解绑再重绑"，也不会泄漏监听。
+def bind_events(node)
+  owner = node.owner
 
-      on_click = node.props[:on_click]
-      if on_click
-        node.dom.addEventListener("click", ->(event) { owner.handle_event(on_click, Native(event)) })
-      end
-
-      on_key = node.props[:on_key]
-      if on_key
-        node.dom.addEventListener("keydown", ->(event) { owner.handle_key(on_key, key_event(event)) })
-      end
-
-      on_focus = node.props[:on_focus]
-      if on_focus
-        node.dom.addEventListener("focus", ->(event) { owner.handle_event(on_focus, Native(event)) })
-      end
-
-      on_blur = node.props[:on_blur]
-      if on_blur
-        node.dom.addEventListener("blur", ->(event) { owner.handle_event(on_blur, Native(event)) })
-      end
-    end
+  node.dom.addEventListener("click", ->(event) {
+    handler = node.props[:on_click]
+    owner.handle_event(handler, Native(event)) if handler
+  })
+  node.dom.addEventListener("keydown", ->(event) {
+    handler = node.props[:on_key]
+    owner.handle_key(handler, key_event(event)) if handler
+  })
+  node.dom.addEventListener("focus", ->(event) {
+    handler = node.props[:on_focus]
+    owner.handle_event(handler, Native(event)) if handler
+  })
+  node.dom.addEventListener("blur", ->(event) {
+    handler = node.props[:on_blur]
+    owner.handle_event(handler, Native(event)) if handler
+  })
+end
 
     # 全局键盘（G-9）：window 级 keydown，绑定组件生命周期（卸载时由 unmount_component 解绑）
     def register_window_key(component, handler)

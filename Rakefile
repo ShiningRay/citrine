@@ -11,12 +11,13 @@ end
 desc "编译示例并运行 Node 桩验收"
 task :stubs do
   Dir.chdir("examples") do
-    %w[counter todo reactive_props canvas_counter canvas_todo].each do |name|
+    %w[counter todo reactive_props keyed_list canvas_counter canvas_todo].each do |name|
       sh "opal -c -I../lib -I. -o #{name}.js #{name}.rb"
     end
     sh "node stub_check.js counter"
     sh "node stub_check.js todo"
     sh "node stub_check.js reactive_props"
+    sh "node stub_check.js keyed_list"
     sh "node canvas_stub_check.js counter"
     sh "node canvas_stub_check.js todo"
   end
