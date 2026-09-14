@@ -30,6 +30,7 @@ module Citrine
 
     def initialize
       @parents = []
+      @reuse_pools = []
     end
 
     def mount_component(component, element)
@@ -73,6 +74,9 @@ module Citrine
               "一页多根请分别用各渲染器实例（DomRenderer.new + mount_component），不要多次 mount_at"
       end
 
+      node.reuse_key = node.props[:key]
+      node.identity ||= [:element, node.type]
+
       node.dom = create_dom(node)
       warn_unreactive_proc(node)
       register_ref(node)
@@ -84,16 +88,18 @@ module Citrine
       # G-2：响应式属性必须在**本节点自己的 Effect** 内求值——挂载路径上直接求值会让
       # 订阅落进外层块（正是要消除的隐性外扩）。重跑只重设属性，不重建子树。
       if reactive? && reactive_props?(node)
-        node.owned_effects << Effect.create { apply_props(node) }
+        node.props_effect = Effect.create { apply_props(node) }
+        node.owned_effects << node.props_effect
       else
         apply_props(node)
       end
 
       if node.block
         if reactive?
-          node.owned_effects << Effect.create do
+          node.block_effect = Effect.create do
             run_block(node) { node.owner.instance_exec(&node.block) }
           end
+          node.owned_effects << node.block_effect
         else
           run_block(node) { node.owner.instance_exec(&node.block) }
         end
@@ -104,23 +110,129 @@ module Citrine
       node
     end
 
+    # 嵌套组件入口（Component#render 调用）。
+    #
+    # 约定（P0-1/S1）：子组件的 view 必须渲染**恰好一个根节点**——那个节点就是组件的
+    # 复用/销毁单位（不引入虚拟边界层：没有 DOM 中间层，重排就是移动真实节点）。
+    # 复用 = 同一个子组件实例 + 同一个根节点：就地更新 props，并重跑 view 把输出
+    # 调和回这棵根（同一批 DOM、state、Effect 全保留）。
+    def render_component(owner, component, props)
+      raise "Citrine.render：没有父节点（只能在组件的 view 里渲染子组件）" unless @parents.last
+
+      klass = component.is_a?(Class) ? component : component.class
+      key = props[:key]
+      child_props = props.reject { |name, _| name == :key }
+      identity = [:component, klass]
+
+      if (existing = reusable_node(key, identity, child_props))
+        child = existing.rendered_component
+        child.update_props(child_props) if component.is_a?(Class) && child.respond_to?(:update_props)
+        return refresh_component_view(existing, child, identity, key, child_props)
+      end
+
+      child = component.is_a?(Class) ? klass.new(child_props) : component
+      node = capture_component_root(child)
+      adopt_root(node, child, identity, key, child_props)
+      register_window_keys(child)
+      child.run_mount_hooks if child.respond_to?(:run_mount_hooks)
+      node
+    end
+
+    # 跑一次子组件 view，要求恰好产出一个根节点，并返回它（已挂在当前父下）
+    def capture_component_root(child)
+      parent = @parents.last
+      before = parent.children.size
+      child.instance_exec { view }
+      added = parent.children[before..] || []
+      unless added.size == 1
+        names = added.map { |n| n.type }.join(", ")
+        raise "Citrine.render：子组件的 view 必须渲染**恰好一个**根节点，" \
+              "实际 #{added.size} 个（#{names.empty? ? '无' : names}）；多根或纯文本请自行包一层 stack { }"
+      end
+
+      added.first
+    end
+
+    # 把一个真实节点标记为"某子组件的根"（复用 / 卸载 / 生命周期都以它为单位）
+    def adopt_root(node, child, identity, key, child_props)
+      node.rendered_component = child
+      node.component_identity = identity # 注意：不覆盖 identity（它仍是该元素的元素身份）
+      node.reuse_key = key
+      node.component_props = child_props
+      child.root = node if child.respond_to?(:root=)
+      child.renderer = self if child.respond_to?(:renderer=)
+      node
+    end
+
+    # 复用：重跑子组件 view，把输出调和回既有根节点；根节点换了类型就换新（返回新节点）
+    def refresh_component_view(node, child, identity, key, child_props)
+      parent = @parents.last
+      @reuse_pools.push(ReusePool.new([node]))
+      parent.children.delete(node) # view 重跑时会按位置把它重新计入
+      refreshed = begin
+        capture_component_root(child)
+      ensure
+        @reuse_pools.pop
+      end
+
+      if refreshed.equal?(node)
+        node.component_props = child_props
+        node
+      else
+        dispose(node) # 旧根整棵卸载；组件实例本身不重建，所以不重跑 mount 钩子
+        adopt_root(refreshed, child, identity, key, child_props)
+        refreshed
+      end
+    end
+
+    # 复用匹配：key 优先，没有 key 时按"本次第几个子节点"对位（React 的隐含位置 key）。
+    # 命中后节点按新顺序重新排位。返回 nil 表示"不匹配，应新建"。
+    def reusable_node(key, identity, props)
+      pool = @reuse_pools.last
+      return nil unless pool
+
+      node = pool.take(key, identity, props)
+      return nil unless node
+
+      # 复用的节点要重新计入当前父的子节点表（本轮开始时已清空），顺序由追加次序决定
+      @parents.last.children << node
+      attach(node, @parents.last)
+      node
+    end
+
+    # 复用既有节点：就地换上新 props/block，重应用属性，并重跑两个 Effect。
+    # 事件监听不需要重绑：DOM 监听器在事件发生时从 node.props 现取处理器（见 DomRenderer#bind_events）。
+    def refresh_node(node, props, block)
+      node.props = props
+      node.block = block
+      apply_props(node)
+      node.props_effect&.run
+      node.block_effect&.run
+      node
+    end
+
     private
 
     def run_view(root, component)
       if reactive?
-        root.owned_effects << Effect.create do
+        root.block_effect = Effect.create do
           run_block(root) { component.instance_exec { view } }
         end
+        root.owned_effects << root.block_effect
       else
         run_block(root) { component.instance_exec { view } }
       end
     end
 
-    # 重建 node 的子树：先销毁旧子节点（连同其 Effect 订阅），再执行 block
+    # 重建 node 的子树：带 key 的子节点**复用**（同一批 DOM/Effect/组件实例），
+    # 其余按今天的语义整体重建；本轮未被复用的旧节点在此完整卸载。
     def run_block(node)
-      node.children.dup.each { |child| dispose(child) }
+      previous = node.children.dup
       node.children.clear
       @parents.push(node)
+      pool = ReusePool.new(previous)
+      @reuse_pools.push(pool)
+
       result = yield
       if !result.nil? && node.children.empty?
         warn_nonstring(node, result) unless result.is_a?(String)
@@ -129,6 +241,69 @@ module Citrine
       result
     ensure
       @parents.pop
+      @reuse_pools.pop
+      pool.unused_nodes.each { |old| dispose(old) }
+    end
+
+    # keyed 复用的匹配池：一次块执行内，按 key + 身份标签取用旧节点。
+    class ReusePool
+      def initialize(nodes)
+        @all = nodes.dup
+        @keyed = {}
+        nodes.each { |node| @keyed[node.reuse_key] = node if node.reuse_key }
+        @taken = {}
+        @seen = {}
+        @cursor = 0
+      end
+
+      # key 优先；没有 key 时按"本次第几个子节点"对位匹配（React 的隐含位置 key）。
+      # 同一个节点有两种身份：元素身份（自身）与组件根身份（它是某子组件的根）——
+      # 父组件按组件身份匹配、子组件 view 重跑时按元素身份匹配，两者指向同一节点。
+      def take(key, identity, props)
+        @cursor += 1
+        candidate = if key
+                      register!(key)
+                      @keyed[key]
+                    else
+                      @all[@cursor - 1]
+                    end
+        return nil unless candidate
+        return nil if @taken.key?(candidate.object_id)
+
+        expected = if identity.first == :component
+                     candidate.component_identity == identity ? candidate.component_props : nil
+                   else
+                     candidate.identity == identity ? candidate.props : nil
+                   end
+        return nil unless expected && same_props?(expected, props)
+
+        @taken[candidate.object_id] = candidate
+        candidate
+      end
+
+      # 登记本层出现过的 key（新建路径也要走，用于重复检测）
+      def register!(key)
+        raise "Citrine: 同一层出现重复 key #{key.inspect}（key 只需在兄弟间唯一）" if @seen.key?(key)
+
+        @seen[key] = true
+      end
+
+      # 复用之外的旧节点（含所有没 key 的）＝本轮被替换掉的，交给渲染器卸载
+      def unused_nodes
+        @all - @taken.values
+      end
+
+      private
+
+      # 比较 props 时忽略 key 与 Proc：Proc（响应式属性 / 回调）每次都是新对象，
+      # 不能作为"变了"的依据（S2 会让它们真正参与更新）
+      def same_props?(old_props, new_props)
+        comparable(old_props) == comparable(new_props)
+      end
+
+      def comparable(props)
+        props.reject { |name, value| name == :key || value.is_a?(Proc) }
+      end
     end
 
     # F16：block 返回非字符串时按 to_s 渲染而非静默置空；每类只提醒一次
@@ -148,6 +323,14 @@ module Citrine
       node.owned_effects.clear
       node.children.dup.each { |child| dispose(child) }
       node.children.clear
+
+      # 组件边界：子组件随之卸载（解绑全局键盘 + 跑 on_unmount），顺序是"先子后父"
+      if (child = node.rendered_component)
+        node.rendered_component = nil
+        unregister_window_keys(child)
+        child.run_unmount_hooks if child.respond_to?(:run_unmount_hooks)
+      end
+
       detach(node)
     end
 

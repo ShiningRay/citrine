@@ -42,7 +42,9 @@ module Citrine
     def setup_widget(_node); end
 
     def finalize(node)
-      node.dom = serialize(node) unless node.type == :root
+      return if node.type == :root
+
+      node.dom = serialize(node)
     end
 
     def serialize(node)

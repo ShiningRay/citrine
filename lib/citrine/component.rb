@@ -24,6 +24,9 @@ module Citrine
   #     end
   #   end
   class Component
+    # 元素 DSL 方法名：prop 不能与它们重名（否则读 prop 会覆盖元素方法）
+    DSL_METHODS = %i[box stack row label button text_input check_box render].freeze
+
     class << self
       def prop_defs
         @prop_defs ||= superclass.respond_to?(:prop_defs) ? superclass.prop_defs.dup : {}
@@ -39,6 +42,12 @@ module Citrine
 
       # 只读输入，来自父组件；未声明的 prop 视为错误
       def prop(name, type: nil, default: nil)
+        if DSL_METHODS.include?(name)
+          raise ArgumentError,
+                "prop :#{name} 与元素 DSL 方法同名：读它会把 #{name} { … } 覆盖掉。" \
+                "请改名，或显式读 props[:#{name}]"
+        end
+
         prop_defs[name] = { type: type, default: default }
         define_method(name) { @props[name] }
       end
@@ -54,6 +63,50 @@ module Citrine
       def computed(name, &block)
         compute_defs[name] = block
         define_method(name) { computation(name) }
+      end
+
+      # ── 子组件关键字（P0-1，写法 A：小写关键字）────────────────
+      #
+      #   class WatchlistPanel < Citrine::Component
+      #     components WatchRow                 # → view 里可用 watch_row(…)
+      #     components PositionRow => :pos_row  # → 显式改名（与本类已有方法重名时）
+      #   end
+      #
+      # 关键字是与元素 DSL（box / label / stack / …）同构的小写方法，底层就是 render。
+      def components(*specs)
+        specs.each do |spec|
+          klass, keyword = spec.is_a?(Hash) ? spec.first : [spec, nil]
+          name = (keyword || default_keyword(klass)).to_sym
+          if method_defined?(name) || private_method_defined?(name)
+            raise ArgumentError,
+                  "components #{klass}: 关键字 #{name} 与本类已有方法重名，请显式改名：" \
+                  "components #{klass.name} => :其他名字"
+          end
+
+          component_keywords[name] = klass
+          define_method(name) do |**props, &block|
+            render(klass, **props, &block)
+          end
+        end
+      end
+
+      def component_keywords
+        @component_keywords ||=
+          superclass.respond_to?(:component_keywords) ? superclass.component_keywords.dup : {}
+      end
+
+      # PositionRow → position_row；Panels::WatchRow → watch_row
+      def default_keyword(klass)
+        name = klass.name.to_s
+        if name.empty?
+          raise ArgumentError,
+                "components 需要具名组件类；匿名类请显式给关键字（components Foo => :foo_keyword）"
+        end
+
+        name.split("::").last
+            .gsub(/([A-Z]+)([A-Z][a-z])/, '\1_\2')
+            .gsub(/([a-z\d])([A-Z])/, '\1_\2')
+            .downcase
       end
 
       # ── 生命周期与全局键盘（G-9 / G-10）─────────────────────
@@ -123,6 +176,25 @@ module Citrine
       @signals ||= {}
     end
 
+    # 父组件重传 props（嵌套复用时的就地更新，P0-1/S1）：
+    # 校验口径与 initialize 完全一致（未声明 prop / 类型不符都当场报错）。
+    # 子组件侧的读法不变（prop :x 仍是只读），S2 会把它们升级成信号以获得细粒度更新。
+    def update_props(new_props)
+      defs = self.class.prop_defs
+      unexpected = new_props.keys - defs.keys
+      raise ArgumentError, "未声明的 prop: #{unexpected.join(', ')}" unless unexpected.empty?
+
+      new_props.each do |name, value|
+        definition = defs[name]
+        if definition[:type] && !value.is_a?(definition[:type])
+          raise TypeError, "prop #{name} 应为 #{definition[:type]}，实际为 #{value.class}"
+        end
+
+        @props[name] = value
+      end
+      self
+    end
+
     def computations
       @computations ||= {}
     end
@@ -173,6 +245,21 @@ module Citrine
       raise NotImplementedError, "#{self.class} 必须实现 #view"
     end
 
+    # 渲染子组件（P0-1 的底层原语，写法 C）：
+    #   render(WatchRow, code: code, key: code)   # 传类 + props（推荐）
+    #   render(row_instance, key: code)           # 传实例（props 由实例自己持有）
+    # 需要复用实例/state 时给 key：同一层（同一父节点下）key 相同的子组件会被保留。
+    def render(component, **props, &block)
+      raise ArgumentError, "render 暂不支持 block（子组件插槽留待 S3）" if block
+
+      unless component.is_a?(Class)
+        extra = props.keys - [:key]
+        raise ArgumentError, "render(实例) 不能再传 props（#{extra.join(', ')}）：props 由实例自己持有" unless extra.empty?
+      end
+
+      Citrine.renderer.render_component(self, component, props)
+    end
+
     # ── 内部 ────────────────────────────────────────────────
 
     def handle_event(handler, event = nil)
@@ -181,7 +268,10 @@ module Citrine
         # 无参方法保持原语义；带参方法（如 on_key: :on_key_press）拿到事件对象
         method(handler).arity.zero? ? send(handler) : send(handler, event)
       when Proc
-        handler.arity.zero? ? instance_exec(&handler) : instance_exec(event, &handler)
+        # 事件 Proc 是回调（区别于 REACTIVE_PROPS 的求值 Proc）：保持闭包 self。
+        # 嵌套组件传入的父级回调，其方法接收者由定义处（父）的词法作用域决定，
+        # instance_exec 重绑到 emit 的 owner（子）会让父组件回调里的方法调用全部断裂。
+        handler.arity.zero? ? handler.call : handler.call(event)
       else
         raise ArgumentError, "无法处理的事件处理器: #{handler.inspect}"
       end
@@ -228,6 +318,11 @@ module Citrine
     end
 
     def emit(type, props, &block)
+      # keyed 复用：命中旧节点就沿用（DOM / 子树 / Effect 全保留）
+      if (existing = Citrine.renderer.reusable_node(props[:key], [:element, type], props))
+        return Citrine.renderer.refresh_node(existing, props, block)
+      end
+
       # 样式在 API 边界归一（决策 #10）；Proc 样式是响应式属性，求值后归一（Renderer#resolve_style）
       if props[:style] && !props[:style].is_a?(Proc)
         props = props.merge(style: Style.normalize(props[:style]))

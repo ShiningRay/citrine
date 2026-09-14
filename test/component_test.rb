@@ -153,7 +153,9 @@ class KeyDispatchTest < Minitest::Test
 
   def test_proc_handler_with_arity_one_receives_event
     w = KeyDispatchWidget.new
-    w.handle_key(->(ev) { self.log = log + ["proc:#{ev.key}"] }, Citrine::KeyEvent.new("Tab"))
+    # 事件 Proc 保持闭包 self（与 G-2 的划分一致：值在 owner 求值、行为在定义处执行），
+    # 跨组件回调应捕获目标对象，而不是依赖重绑
+    w.handle_key(->(ev) { w.log = w.log + ["proc:#{ev.key}"] }, Citrine::KeyEvent.new("Tab"))
 
     assert_equal ["proc:Tab"], w.log
   end
