@@ -22,6 +22,14 @@ module Citrine
       @value
     end
 
+    # 读值但**不订阅**：只想拿一份快照、不想让当前 Effect 依赖它时用（MobX 的 untracked）。
+    # get 一旦落在块/Effect 里就会建立依赖——"订阅"与"取值"耦合在一起，
+    # 想两者分开时就需要这个显式出口。
+    def peek
+      run_init if @init
+      @value
+    end
+
     def set(new_value)
       @init = nil # 显式写入过就不再是"未初始化"
       return self if new_value == @value

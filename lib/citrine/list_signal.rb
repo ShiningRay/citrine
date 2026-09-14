@@ -22,13 +22,15 @@ module Citrine
   # 语义边界（与 v1 一致）：只追踪**集合自身**的变化；元素内部的改动不算变更
   # （`rows.get[0][:n] = 1` 不会触发），要更新请替换那个元素。
   class ListSignal < Signal
+    include Enumerable # each 已在下面接了订阅语义 → find/select/count/min/max/sum/sort_by… 都能用
+
     def initialize(value = [], &init)
-      super(value.nil? ? [] : value.to_a.dup, &init)
+      super(list_value(value), &init)
     end
 
     # 写入一律冻结副本：调用方的原数组不受影响，内部值也不会被就地改到
     def set(list)
-      super(list.to_a.dup.freeze)
+      super(list_value(list))
     end
 
     # ── 读：都经 get，因此在 Effect / 块内读会建立依赖 ──────────────
@@ -36,6 +38,17 @@ module Citrine
     def get
       super.freeze
     end
+
+    # 不订阅的读（"只想拿一份快照看"）：get 一旦落在 Effect 里就建立依赖，
+    # peek 明确表达"这次读不参与响应"
+    def peek
+      @value
+    end
+
+    # 复制一份集合（而不是像 Object#dup 那样克隆信号对象）——
+    # 从数组迁过来的人会习惯性地写 `list.dup`
+    def dup = ListSignal.new(get)
+    def clone = ListSignal.new(get)
 
     def to_a = get
     def size = get.size
@@ -77,6 +90,19 @@ module Citrine
     end
     alias prepend unshift
 
+    # 追加 / 前插并保留最多 limit 个（超出的丢弃另一端的旧元素）：**一次通知**。
+    # 直接写 `list << x` 再 `list.shift` 会通知两次 —— 每次通知都是一轮块重跑 / 渲染，
+    # 所以"有上限的列表"需要这个防呆写法。
+    def push_bounded(item, limit)
+      set((get + [item]).last(limit))
+      self
+    end
+
+    def unshift_bounded(item, limit)
+      set(([item] + get).first(limit))
+      self
+    end
+
     def insert(index, *items)
       list = get.dup
       list.insert(index, *items)
@@ -84,7 +110,6 @@ module Citrine
       self
     end
 
-    # 以下三个沿用 Array 的返回值（被移除的元素 / nil），便于 `while (o = list.pop)`
     # 以下两个沿用 Array 的返回值（被移除的元素 / 元素数组 / nil）
     def pop(count = nil)
       list = get
@@ -159,6 +184,20 @@ module Citrine
     def reject!(&block) = transform_values { |list| list.reject(&block) }
 
     private
+
+    # 归一 + 类型守卫：Hash 会被 to_a 悄悄拆成键值对，这类错误必须在构造/写入期就报
+    def list_value(value)
+      case value
+      when nil then [].freeze
+      when Array then value.dup.freeze
+      when Hash
+        raise ArgumentError, "signal_list 需要数组，收到 Hash；要放 Hash 请用 Citrine.signal(...)"
+      else
+        raise ArgumentError, "signal_list 需要数组，收到 #{value.class}" unless value.respond_to?(:to_a)
+
+        value.to_a.dup.freeze
+      end
+    end
 
     def transform_values
       set(yield(get))

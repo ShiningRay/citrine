@@ -212,6 +212,8 @@ ruby -run -e httpd . -p 4401
 ### 框架备忘
 
 - **创建信号（A/B/C/D 四个入口）**：组件内首选 `state` / `computed`；组件外与"按 key 记忆"场景：
+  （另有 `peek`：读值但**不订阅**——`get` 会把"取值"与"订阅"绑在一起，只想拿一份快照时用它；
+  ListSignal 的 `peek` 同样返回冻结快照）
   - `Citrine.signal(0)` / `Citrine.signal { 惰性初值 }` —— 到处可用（领域模型、测试），
     且**不必写出裸的 `Signal`**（会撞 stdlib 的 `::Signal`，见陷阱 3）
   - `include Citrine::Reactive` → 普通类里直接 `signal(0)`（组件不要 include：组件已有
@@ -222,6 +224,9 @@ ruby -run -e httpd . -p 4401
     `delete_at` / `replace` / `sort!` … 每次变更即一次通知（内部换新数组，触发路径仍只有
     `Signal#set` 一条）；`get` 返回**冻结**快照，`rows.get << x` 会当场 `FrozenError`
     而不是静默不更新；读操作（`size` / `each` / `map` / `include?` …）在块内读会建立依赖
+    另外：`include Enumerable`（`find` / `select` / `count` / `min` / `max` / `sum` / `sort_by` … 都能用）、
+    `push_bounded(x, limit)` / `unshift_bounded(x, limit)`（有上限的列表**一次通知**，别写 `<<` 再 `shift`）、
+    `dup` 得到集合副本（不是克隆信号对象）、`signal_list(Hash)` 与 `signal_list(42)` 当场报错
 - **键盘：元素级 + 全局（G-9）**：元素上写 `on_key:`——Symbol/Proc 直接收事件，哈希形式按 key 查表
   （`on_key: { "Escape" => :clear_draft, else: :fallback }`）；焦点相关用 `on_focus:` / `on_blur:`。
   键盘优先应用要的全局快捷键用类宏 `window_key :handler` 声明（window 级 keydown，
