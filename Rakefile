@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "rake/testtask"
+require "json"
+require "bundler/gem_tasks" # rake build / rake release（T-A3 发布路径；发布走 Trusted Publishing）
 
 Rake::TestTask.new do |t|
   t.libs << "test"
@@ -66,6 +68,28 @@ task :map_check do
 
     puts "  source map sources 指回 .rb ✓（#{sources.grep(/\.rb\z/).size} 项）"
   end
+end
+
+desc "真实浏览器布局守卫（T-A2）：headless Chrome 打开守卫页，量尺寸断言"
+task :browser do
+  chrome = ENV["CHROME_BIN"] || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  raise "找不到 Chrome（可用 CHROME_BIN 指定路径）" unless File.exist?(chrome)
+
+  Dir.chdir("examples") do
+    sh "opal -c --no-source-map -I../lib -I. -o browser_check.js browser_check.rb"
+  end
+
+  page = File.expand_path("examples/browser_check.html")
+  dom = `"#{chrome}" --headless=new --disable-gpu --no-first-run --virtual-time-budget=3000 --dump-dom "file://#{page}"`
+  match = dom.match(%r{<pre id="browser-report">([^<]+)</pre>})
+  raise "浏览器没有产出布局报告（页面加载失败？）" unless match
+
+  report = JSON.parse(match[1])
+  raise "容器塌陷：stack 宽度为 0" unless report["stack_width"] > 0
+  raise "容器塌陷：stack 高度为 0" unless report["stack_height"] > 0
+  raise "同层兄弟 top 相等（应纵向排列）" unless report["top_distinct"]
+
+  puts "  布局守卫通过：#{report.inspect}"
 end
 
 task default: :test
