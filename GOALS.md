@@ -241,6 +241,22 @@ WebSocket 推给 webview 显示。
   缺少可直接照抄的 Ruby 先例。API 示意：`count = signal(0)`，读取处自动
   建立依赖，写入只更新受影响的节点。
 
+### 生态扩展：citrine-stream（2026-09-14 首版）
+
+- 独立仓库 <https://github.com/ShiningRay/citrine-stream>（gem citrine-stream
+  0.1.0，未发布）：事件编排层，分工定式为**状态归 Signal、事件编排归流**。
+  纯 Ruby 热事件流 + 时间算子（debounce / throttle / switch_map / take_until /
+  scan / distinct_until_changed…），时钟可注入——VirtualClock 供 CRuby
+  确定性测试，浏览器侧经 Opal 用 setTimeout；桥接 `Citrine::Signal.from_stream`
+  （Solid `from()` 模式，单向：流 → 信号，同值在信号边界天然去重）。
+- 立论与红线：借 RxJS 的流算子思想而非移植 RxJS（不引 `rx` gem——产物体积
+  是 P1 议题，偷思想不偷依赖）；其核心零依赖、Opal 专有代码只在平台时钟
+  文件，与本仓红线同构。`Signal#to_stream` 反向桥接留待生命周期宏（P0）
+  落地后一并设计；组件销毁清理暂用 `take_until(destroyed 哨兵流)` 手工模式。
+- 时机注记：属加分项而非 P0 缺口——组件组合 / keyed 复用 / props 传播仍
+  优先；等示例真正需要防抖 / 取消过期请求时，再把桥接测试纳入本仓 CI。
+  验收：CRuby 35 测全绿 + Opal 编译 Node 冒烟通过。
+
 ## 七、核心 API 设计（决策 #3 定案：Signal 三宏）
 
 > 定案日期：2026-09-14；状态：倾向方案，待 M1 原型验证。
@@ -437,6 +453,7 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 | 2026-09-14 | **GitHub 化 + CI 全绿**：推送至 github.com/ShiningRay/citrine（public）；GitHub Actions 三件套——CI（Ruby 3.1-3.4 矩阵 + 编译/四桩 + macOS 打包冒烟）、Release（v* 标签构建 gem 附 Release，RUBYGEMS_API_KEY 配置后自动 push）、Dependabot（bundler + actions 周更）；附 Rakefile（test/stubs 任务） | Roadmap P2-10/11 提前落地；修复：CI 上打包需 bundle exec 解析 opal 可执行文件 |
 | 2026-09-14 | **仓库化 + gem 0.1.0**：代码迁入独立 citrine/ 仓库（git init，首次提交 41 文件），gemspec + version + MIT LICENSE + .gitignore 就绪，`gem build` 通过（citrine-0.1.0.gem，21.5KB，未发布）；决策 #7 包结构定案：v1 单 gem，**npm 不做** | 源语言 Ruby → RubyGems 为唯一分发渠道；npm 的唯一例外是 P1 运行时拆分时的 citrine-runtime 预编译资产 |
 | 2026-09-14 | **响应式属性（G-2）落地**：props 的值传 Proc 即声明"响应式属性"，在该节点自己的 Effect 内求值（白名单 `css_class`/`placeholder`/`style`/`direction`/`gap`）；DOM 侧 `apply_props` 改为幂等、事件绑定拆到新钩子 `bind_events`，重跑只重设属性、不重建子树；消失的内联样式键显式清空；SSR 只求值一次，Canvas 绘制时求值。新增示例 `reactive_props` + 12 项桩断言（含"兄弟/目标 DOM 未被重建"） | 第二辑 FRICTION（电子表格 dogfooding）的 P0：props 求值位置决定订阅范围，一处看不见的 5~10 倍重绘；Roadmap P0-1 的"props 响应式传播"由此先行落地，嵌套/keyed 复用仍待做 |
+| 2026-09-14 | **生态扩展首版：citrine-stream 独立仓库**（热事件流 + 时间算子 + 可注入时钟 + `Signal.from_stream` 单向桥接；CRuby 35 测 + Opal Node 冒烟通过，gem 0.1.0 未发布），详见第六节「生态扩展」小节 | RxJS 思想的事件编排层：信号管状态、流管事件，业界收敛分工；核心零依赖对齐本仓红线，不引 rx gem |
 
 | 2026-09-14 | **布局方向：语法糖 + 开发期提醒（G-8）**：新增 `stack { }`（竖排）/ `row { }`（横排）语法糖（再传 `direction` 直接报错）；新增 `Citrine.dev_mode`，`bin/citrine dev` 由 dev_server 注入 `window.CITRINE_DEV` 自动置位，开发模式下对"未声明方向且有多子节点"的 `box` 在每次挂载后汇总提醒一次。示例改用 `stack`/`row` | 两类 dogfooding 应用各栽一次同一坑（面板/网格塌成一条），且**桩里没有布局引擎、测不出**——说明这不是"注意点"而是默认值的表达能力问题；不改默认值以免破坏性变更，1.0 再评估 |
 | 2026-09-14 | **生命周期 + 键盘（G-9 / G-10）**：类宏 `on_mount`/`on_unmount`（含继承）+ `ref:` 句柄 + `Citrine.unmount(component)`；元素级 `on_key`/`on_focus`/`on_blur` 与类宏 `window_key`（window 级，随卸载解绑），键盘事件归一为平台无关的 `Citrine::KeyEvent`（路由 `Component#handle_key` 支持 Symbol/Proc/哈希查表）。顺带修复：三宏定义（prop/state/computed）现在会被子类继承。新增 test/component_test.rb（12 项）+ 桩 9 项断言（含"卸载后 window 监听解绑"） | 键盘优先应用此前只能全量外挂 `window.addEventListener`（电子表格 60 行 glue），且没有卸载路径——定时器/监听器无法回收；这两件事共用同一条生命周期，因此合并落地 |
