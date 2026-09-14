@@ -46,6 +46,7 @@ end
 require_relative "citrine/version"
 require_relative "citrine/signal"
 require_relative "citrine/key_event"
+require_relative "citrine/num"
 require_relative "citrine/node"
 require_relative "citrine/component"
 require_relative "citrine/renderer"

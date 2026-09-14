@@ -23,3 +23,21 @@ task :stubs do
 end
 
 task default: :test
+
+desc "数值工具跨平台一致性：CRuby 与 Opal 输出逐字节比对（G-11）"
+task :parity do
+  mkdir_p "tmp"
+  cruby = "tmp/num_cruby.txt"
+  opal = "tmp/num_opal.txt"
+  sh "ruby -Ilib examples/num_parity.rb > #{cruby}"
+  sh "opal -c -Ilib -o tmp/num_parity.js examples/num_parity.rb"
+  sh "node tmp/num_parity.js > #{opal}"
+
+  next puts "parity OK：两侧输出一致（#{File.readlines(cruby).size} 行）" if File.read(cruby) == File.read(opal)
+
+  sh "diff -u #{cruby} #{opal}" do |ok, _|
+    ok # diff 的退出码非 0 不代表 Rake 失败，下面统一 abort
+  end
+  abort "parity 失败：数值工具在 CRuby 与 Opal 下输出不一致（见上）"
+end
+
