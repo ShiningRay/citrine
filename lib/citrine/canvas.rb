@@ -49,6 +49,11 @@ module Citrine
 
     def attach(_node, _parent); end
 
+    # Canvas 没有"页面宿主"概念：portal 内容按画布根级布局/绘制
+    def resolve_portal_host(_target)
+      @root.dom
+    end
+
     def detach(_node); end
 
     def apply_props(_node); end
@@ -137,8 +142,8 @@ module Citrine
     end
 
     def box?(node)
-      # fragment（S1-4）：透明容器按容器参与布局，让多根子组件在画布上照常展开
-      node.type == :root || node.type == :box || node.type == :fragment
+      # fragment / portal（S1-4 / S1-5）：透明容器按容器参与布局，让多根/弹层照常展开
+      node.type == :root || node.type == :box || node.type == :fragment || node.type == :portal
     end
 
     def box_axes(node)
@@ -217,7 +222,7 @@ module Citrine
           @ctx.fillRect(node.dom[:x], node.dom[:y], node.dom[:w], node.dom[:h])
         end
         node.children.each { |child| paint(child) }
-      when :fragment
+      when :fragment, :portal
         # 透明容器：只递归子根，自身不占绘制
         node.children.each { |child| paint(child) }
       when :label

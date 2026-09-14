@@ -41,9 +41,15 @@ module Citrine
 
     def setup_widget(_node); end
 
+    # SSR 无宿主概念：portal 内容按逻辑位置内联输出
+    def resolve_portal_host(_target)
+      ""
+    end
+
     def finalize(node)
-      if node.type == :fragment
-        # 透明容器（S1-4）：多根子组件 / children 的序列化就是子根依次拼接
+      if node.type == :fragment || node.type == :portal
+        # 透明容器（S1-4 / S1-5）：fragment 与 SSR 侧的 portal 都按子根依次拼接
+        #（SSR 无宿主概念，portal 内容按逻辑位置内联输出）
         node.dom = node.children.map(&:dom).join
         node.dom += escape_html(node.text) if node.text
         return

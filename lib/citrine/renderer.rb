@@ -25,12 +25,16 @@ module Citrine
     # 事件处理器（on_*）不在此列：它们的 Proc 是回调，不是待求值的值。
     REACTIVE_PROPS = %i[css_class placeholder style direction gap].freeze
 
+    # 透明容器类型（S1-4 fragment / S1-5 portal）：无自身 DOM 语义，
+    # dispose 时不对它们做 detach（子根挂在真实容器上，逐个摘除）
+    TRANSPARENT_TYPES = %i[fragment portal].freeze
+
     # S2-2：框架未消费的属性原样透传到 DOM / SSR（id / disabled / aria_* / data_* / title …）。
     # 命名规则：snake_case → kebab-case（aria_label → aria-label）；
     # 布尔规则：true → 空值属性（<button disabled>）、false / nil → 不输出。
     # 消费面（不透传）：布局快捷键、样式、复用/引用标记、事件回调（on_*），
     # 以及值类 prop（见 WIDGET_VALUE_PROPS，节点感知）。
-    ALWAYS_CONSUMED = %i[key ref style css_class direction gap].freeze
+    ALWAYS_CONSUMED = %i[key ref style css_class direction gap portal_target].freeze
 
     # 值类 prop 只在对应控件上被框架消费；其他元素（textarea / select / 自定义标签）
     # 照常透传——否则 value 又会被静默吞掉（F11 的老路）
@@ -90,6 +94,7 @@ module Citrine
       node.reuse_key = node.props[:key]
       node.identity ||= [:element, node.type]
 
+      return mount_portal(node, parent) if node.type == :portal
       return mount_fragment(node, parent) if node.type == :fragment
 
       node.dom = create_dom(node)
@@ -128,7 +133,19 @@ module Citrine
     # 透明容器（S1-4）：children 插槽的落位节点。无自身 DOM——借父容器的，
     # 子孙 attach 经它落到真实父容器；不参与属性/事件（也没有 props 可言）。
     def mount_fragment(node, parent)
-      node.dom = parent.dom
+      mount_transparent(node, parent, parent.dom)
+    end
+
+    # Portal（S1-5）：子树挂到渲染器指定的宿主节点（DOM 下默认 body）——
+    # 逃出父容器的 overflow / 层叠上下文。树上仍是逻辑父的孩子（复用、Effect、
+    # 卸载级联与原地渲染一致），DOM 上子孙落到宿主；卸载时随 dispose 逐个摘除，
+    # 宿主里 portal 之外的内容不受影响。
+    def mount_portal(node, parent)
+      mount_transparent(node, parent, resolve_portal_host(node.props[:portal_target]))
+    end
+
+    def mount_transparent(node, parent, host_dom)
+      node.dom = host_dom
       parent.children << node
       if reactive?
         node.block_effect = Effect.create do
@@ -309,8 +326,8 @@ module Citrine
 
       # 复用的节点要重新计入当前父的子节点表（本轮开始时已清空），顺序由追加次序决定
       @parents.last.children << node
-      # fragment 无自身 DOM（借父容器的），没有可挂的东西
-      attach(node, @parents.last) unless node.type == :fragment
+      # 透明容器（fragment / portal）无自身 DOM（借宿主容器的），没有可挂的东西
+      attach(node, @parents.last) unless TRANSPARENT_TYPES.include?(node.type)
       node
     end
 
@@ -489,8 +506,8 @@ module Citrine
         child.run_unmount_hooks if child.respond_to?(:run_unmount_hooks)
       end
 
-      # 透明容器（fragment）无自身 DOM：子根挂在真实父容器上，不能对它做 detach
-      detach(node) unless node.type == :fragment
+      # 透明容器（fragment / portal）无自身 DOM：子根挂在真实父容器上，不能对它做 detach
+      detach(node) unless TRANSPARENT_TYPES.include?(node.type)
     end
 
     # box 支持布局快捷参数：direction（stack/flow 的抽象）、gap
@@ -628,6 +645,12 @@ module Citrine
     # 线性追加式渲染器按渲染序落位（如 Canvas 全量重绘按树遍历），无需移动。
     def attach_before(_node, _parent, _anchor)
       nil
+    end
+
+    # Portal 宿主解析（S1-5）：target 为 nil → 平台默认宿主（DOM 下是 body）。
+    # 显式给了 target 却解析不到时由平台实现处理（DOM 侧抛错，不静默回退）。
+    def resolve_portal_host(_target)
+      raise NotImplementedError, "#{self.class} 不支持 portal"
     end
 
     # ── 平台钩子 ───────────────────────────────────────────

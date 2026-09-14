@@ -207,6 +207,17 @@ module Citrine
                    raw: ev, prevent_default: -> { ev.preventDefault })
     end
 
+    # S1-5：portal 宿主解析——默认 body；显式 target 是选择器字符串，
+    # 解析不到时抛错（不静默回退，否则弹层会挂错地方）
+    def resolve_portal_host(target)
+      return @document[:body] if target.nil? || target == ""
+
+      host = @document.querySelector(target.to_s)
+      raise "Citrine.portal：找不到宿主元素 #{target.inspect}" if host.nil?
+
+      host
+    end
+
     def set_text(node, text)
       # 透明容器没有自己的文本位（借的是父容器的 DOM，写它会砸掉兄弟内容）
       return if node.type == :fragment

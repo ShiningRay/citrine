@@ -34,7 +34,7 @@ module Citrine
 
     # 元素 DSL 方法名：prop 不能与它们重名（否则读 prop 会覆盖元素方法）
     DSL_METHODS = (%i[box stack row label button text_input check_box
-                      render children element] + ELEMENT_TAGS).freeze
+                      render children element portal] + ELEMENT_TAGS).freeze
 
     # window_key 的作用域包装（S2-3）：scope: :focused 表示"焦点在本组件
     # 子树内才响应"。用 Struct 而不是 Hash/Array 包裹，避免与 handle_key
@@ -396,6 +396,14 @@ module Citrine
     # TAGS[type] || type.to_s 的既有兜底，无需改框架源码
     def element(type, **props, &block)
       emit(type.to_sym, props, &block)
+    end
+
+    # Portal（S1-5）：把块内容挂到渲染器指定的宿主节点（DOM 下默认 body，
+    # 可传 target: 选择器字符串）——弹层/下拉由此逃出父容器的 overflow 与
+    # 层叠上下文，不再堆 z-index。复用、Effect、卸载级联与原地渲染一致。
+    def portal(target: nil, **props, &block)
+      props[:portal_target] = target if target
+      emit(:portal, props, &block)
     end
 
     def view
