@@ -74,6 +74,13 @@ if (which === "counter") {
 
   findButton(app, "重置").fire("click");
   assert("重置", value(), "count = 0　×2 = 0");
+
+  // S3：事件监听按需绑定——没有处理器的元素一个监听都不该挂
+  const plainLabel = findAll(app, "p").find((p) => (p.textContent || "").startsWith("count = "));
+  assert("无处理器的 label 不绑监听", Object.keys(plainLabel._listeners || {}).length, 0);
+  assert("按钮只绑 click", Object.keys(findButton(app, "＋1")._listeners).join(","), "click");
+  const allEls = [app, ...findAll(app, "div"), ...findAll(app, "p"), ...findAll(app, "button"), ...findAll(app, "input")];
+  console.log(`ℹ️ counter 全树监听总数：${allEls.reduce((n, el) => n + Object.keys(el._listeners || {}).length, 0)}`);
 } else if (which === "reactive_props") {
   // 响应式属性（G-2）：点格子只重设两格属性，DOM 节点零重建
   const cells = () => findAll(app, "div").filter((d) => (d.className || "").startsWith("cell"));

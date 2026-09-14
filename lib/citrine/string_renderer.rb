@@ -61,7 +61,8 @@ module Citrine
       out = []
       # 响应式属性在 SSR 侧只求值一次（无订阅、无重跑，与 DOM 输出保持一致）
       css_class = prop_value(node, node.props[:css_class])
-      out << %(class="#{css_class}") if css_class
+      # 属性值必须转义：值里出现引号会提前闭合属性，把数据变成新属性（属性注入）。
+      out << %(class="#{escape_html(css_class)}") if css_class
       case node.type
       when :text_input
         out << 'type="text"'
@@ -81,8 +82,9 @@ module Citrine
     end
 
     def style_css(style)
-      # 样式键为 snake_case（决策 #10）；内联 CSS 属性必须是 kebab-case
-      style.map { |key, value| "#{Style.kebab(key)}:#{value}" }.join(";")
+      # 样式键为 snake_case（决策 #10）；内联 CSS 属性必须是 kebab-case。
+      # 值同样要转义——理由与 class 相同：属性值里的引号会提前闭合 style 属性。
+      style.map { |key, value| "#{Style.kebab(key)}:#{escape_html(value)}" }.join(";")
     end
 
     def escape_html(text)

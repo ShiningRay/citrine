@@ -181,7 +181,12 @@ module Citrine
         node.component_props = child_props
         node
       else
-        dispose(node) # 旧根整棵卸载；组件实例本身不重建，所以不重跑 mount 钩子
+        # 旧根整棵卸载，但**组件实例仍然活着**：这不是组件卸载，只是它的根换了元素类型。
+        # 先摘掉组件边界再 dispose——否则 dispose 会把它当成卸载（误跑 on_unmount +
+        # 解绑全局键盘），而 adopt_root 不会重新注册，window_key 就此静默失效。
+        # 子树里真正的子组件（孙子）仍由 dispose 递归正常卸载。
+        node.rendered_component = nil
+        dispose(node)
         adopt_root(refreshed, child, identity, key, child_props)
         refreshed
       end
@@ -203,12 +208,17 @@ module Citrine
     end
 
     # 复用既有节点：就地换上新 props/block，重应用属性，并重跑两个 Effect。
-    # 事件监听不需要重绑：DOM 监听器在事件发生时从 node.props 现取处理器（见 DomRenderer#bind_events）。
+    # 事件监听不需要重绑：DOM 监听器在事件发生时从 node.props 现取处理器（见 DomRenderer#ensure_events）。
     def refresh_node(node, props, block)
       node.props = props
       node.block = block
-      apply_props(node)
-      node.props_effect&.run
+      # 有属性 Effect 时由它求值（Effect 体内就是 apply_props）；再直接调一次会让每次复用
+      # 都写两遍属性与样式（幂等但白做），因此这里二选一。
+      if node.props_effect
+        node.props_effect.run
+      else
+        apply_props(node)
+      end
       node.block_effect&.run
       node
     end
@@ -297,9 +307,11 @@ module Citrine
         @seen[key] = true
       end
 
-      # 复用之外的旧节点（含所有没 key 的）＝本轮被替换掉的，交给渲染器卸载
+      # 复用之外的旧节点（含所有没 key 的）＝本轮被替换掉的，交给渲染器卸载。
+      # 以 @taken（object_id 为键）判定"是否被取走"：不构造临时数组/哈希——每轮块重跑
+      # 都会走这里，而 `Array#-` 会为右侧集合建一份临时哈希（Opal 侧同样如此）。
       def unused_nodes
-        @all - @taken.values
+        @all.reject { |node| @taken.key?(node.object_id) }
       end
 
       private
@@ -468,7 +480,8 @@ module Citrine
       raise NotImplementedError
     end
 
-    # 绑定事件监听（只在挂载时调用一次，不参与响应式重跑）
+    # 绑定事件监听（挂载时调用一次）。DOM 渲染器按需绑定，并在响应式属性重跑时
+    # 补齐新出现的处理器（见 DomRenderer#ensure_events）
     def bind_events(_node)
       nil
     end

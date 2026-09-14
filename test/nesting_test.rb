@@ -459,6 +459,40 @@ end
     assert_empty renderer.window_keys
   end
 
+  # S3：子组件的根元素换类型 ≠ 组件卸载——既不能跑 on_unmount，也不能丢 window_key
+  # （此前 dispose 把还活着的子组件当成卸载，解绑全局键盘后 adopt_root 又不重新注册）
+  def test_child_root_type_change_keeps_component_alive
+    unmounted = 0
+    child_klass = Class.new(Citrine::Component) do
+      state :expanded, default: false
+      window_key :on_key_press
+      on_unmount -> { unmounted += 1 }
+
+      def on_key_press(_ev); end
+
+      def view
+        expanded ? label(css_class: "leaf") { "open" } : box(css_class: "panel") { label { "closed" } }
+      end
+    end
+    parent = Class.new(Citrine::Component) do
+      define_method(:view) do
+        stack { render(child_klass, key: "c") }
+      end
+    end.new
+
+    renderer = NestingRenderer.new
+    root = renderer.mount_component(parent, FakeEl.new)
+
+    assert_equal 1, renderer.window_keys.size
+    assert_equal :box, component_roots(root).first.type
+
+    component_roots(root).first.rendered_component.expanded = true
+
+    assert_equal :label, component_roots(root).first.type, "根元素应换成 label"
+    assert_equal 0, unmounted, "根元素换类型不是组件卸载，不该跑 on_unmount"
+    assert_equal 1, renderer.window_keys.size, "根元素换类型后全局键盘仍应保持绑定"
+  end
+
   def test_ssr_renders_nested_components_inline
     html = Citrine.render(NestingParent.new)
 

@@ -56,30 +56,56 @@ module Citrine
       # 响应式 style 换掉整份内联样式：先清掉本次不再出现的旧键（错误态高亮必须能消失）
       track_style_keys(node, style.keys).each { |key| el[:style][Style.camel(key)] = "" }
       style.each { |key, value| el[:style][Style.camel(key)] = value.to_s }
+
+      ensure_events(node) # 复用路径上新增的处理器在此补齐（幂等）
     end
 
-# 事件监听：只在挂载时绑一次，且**不捕获处理器值**——事件发生时从 node.props 现取。
-# 这样节点被复用时（P0-1）自动用上新回调，既不需要"解绑再重绑"，也不会泄漏监听。
-def bind_events(node)
-  owner = node.owner
+    # 事件监听**按需绑定**：props 里真的有处理器时才 addEventListener，
+    # 并记在 node.bound_listeners 上（挂过就不再挂）。事件发生时从 node.props 现取处理器，
+    # 所以复用时不需要重绑——新增的处理器由 apply_props → ensure_events 补上。
+    # 以前是每个元素无条件挂 4 个监听：多数节点（box/label）根本没有处理器，白挂闭包。
+    def bind_events(node)
+      ensure_events(node)
+    end
 
-  node.dom.addEventListener("click", ->(event) {
-    handler = node.props[:on_click]
-    owner.handle_event(handler, Native(event)) if handler
-  })
-  node.dom.addEventListener("keydown", ->(event) {
-    handler = node.props[:on_key]
-    owner.handle_key(handler, key_event(event)) if handler
-  })
-  node.dom.addEventListener("focus", ->(event) {
-    handler = node.props[:on_focus]
-    owner.handle_event(handler, Native(event)) if handler
-  })
-  node.dom.addEventListener("blur", ->(event) {
-    handler = node.props[:on_blur]
-    owner.handle_event(handler, Native(event)) if handler
-  })
-end
+    def ensure_events(node)
+      owner = node.owner
+
+      ensure_event(node, :click, :on_click, "click") do |event|
+        handler = node.props[:on_click]
+        owner.handle_event(handler, Native(event)) if handler
+      end
+      ensure_event(node, :keydown, :on_key, "keydown") do |event|
+        handler = node.props[:on_key]
+        owner.handle_key(handler, key_event(event)) if handler
+      end
+      ensure_event(node, :focus, :on_focus, "focus") do |event|
+        handler = node.props[:on_focus]
+        owner.handle_event(handler, Native(event)) if handler
+      end
+      ensure_event(node, :blur, :on_blur, "blur") do |event|
+        handler = node.props[:on_blur]
+        owner.handle_event(handler, Native(event)) if handler
+      end
+      # text_input 的 on_enter / check_box 的 on_change 走同一套按需绑定
+      ensure_event(node, :enter, :on_enter, "keydown") do |event|
+        ev = Native(event)
+        handler = node.props[:on_enter]
+        owner.handle_event(handler, ev) if handler && ev[:key] == "Enter"
+      end
+      ensure_event(node, :change, :on_change, "change") do |_event|
+        handler = node.props[:on_change]
+        owner.handle_event(handler, node.dom[:checked]) if handler
+      end
+    end
+
+    def ensure_event(node, tag, prop, event_name, &listener)
+      bound = (node.bound_listeners ||= {})
+      return if bound[tag] || !node.props.key?(prop)
+
+      bound[tag] = true
+      node.dom.addEventListener(event_name, listener)
+    end
 
     # 全局键盘（G-9）：window 级 keydown，绑定组件生命周期（卸载时由 unmount_component 解绑）
     def register_window_key(component, handler)
@@ -129,13 +155,7 @@ end
         # F20：字面量初值也要落到 DOM，保持与 SSR 输出一致
         el[:value] = value
       end
-      handler = node.props[:on_enter]
-      return unless handler
-
-      el.addEventListener("keydown", ->(event) {
-        ev = Native(event)
-        node.owner.handle_event(handler, ev) if ev[:key] == "Enter"
-      })
+      # on_enter 不在这里绑：与其它处理器一样走 ensure_events（按需 + 复用时补齐）
     end
 
     def setup_check_box(node)
@@ -148,12 +168,7 @@ end
       else
         el[:checked] = checked ? true : false
       end
-      handler = node.props[:on_change]
-      return unless handler
-
-      el.addEventListener("change", ->(_event) {
-        node.owner.handle_event(handler, el[:checked])
-      })
+      # on_change 同样交给 ensure_events
     end
   end
 end

@@ -257,6 +257,11 @@ module Citrine
       @computations ||= {}
     end
 
+    # computed 的值 Signal 与它的 Effect 一一对应；Effect 必须留引用，卸载时才 dispose 得掉
+    def computation_effects
+      @computation_effects ||= {}
+    end
+
     # 取底层 Signal（双向绑定等需要信号对象本身的场景）
     def signal(name)
       default, init = self.class.state_defs.fetch(name) do
@@ -360,6 +365,7 @@ module Citrine
       dispose_watch_effects # 先停订阅，再跑清理钩子（清理时不该再被信号打回来）
       refs.clear
       self.class.unmount_hooks.each { |hook| run_hook(hook) }
+      dispose_computed_effects # 放在钩子之后：清理时还能读到新鲜值，跑完才释放订阅
     end
 
     # 声明过的 watch 体各起一个 Effect：挂载后跑一次，之后依赖变化就重跑。
@@ -383,6 +389,19 @@ module Citrine
     # 诊断/测试：当前存活的 watcher 数
     def watch_effect_count = (@watch_effects || []).size
 
+    # computed 的 Effect 与 watch 同理：不释放就是"卸载后还跟着上游重算"的幽灵订阅，
+    # 而且会把整条组件对象图钉在信号的订阅表上（CRuby 侧实测：卸载后改 state 仍重算）。
+    # 清掉缓存使重新挂载时按需重建。
+    def dispose_computed_effects
+      computation_effects.each_value(&:dispose)
+      @computation_effects = nil
+      computations.clear
+      self
+    end
+
+    # 诊断/测试：当前存活的 computed Effect 数
+    def computation_effect_count = (@computation_effects || {}).size
+
     private
 
     def computation(name)
@@ -391,7 +410,7 @@ module Citrine
       end
       unless computations.key?(name)
         out = Signal.new(nil)
-        Effect.create { out.set(instance_eval(&block)) }
+        computation_effects[name] = Effect.create { out.set(instance_eval(&block)) }
         computations[name] = out
       end
       computations[name].get

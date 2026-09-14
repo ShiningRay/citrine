@@ -16,7 +16,8 @@ module Citrine
     attr_accessor :rendered_component
     # 该节点的两个 Effect（响应式属性 / 内容 block）：复用时用来就地重跑
     attr_accessor :props_effect, :block_effect
-    # 已绑定的事件监听（DOM 渲染器用；复用时先解绑再按新 props 重绑）
+    # 已按需绑定的事件监听标签（DOM 渲染器用）：事件发生时从 props 现取处理器，
+    # 因此复用时只补挂新出现的处理器，不做"解绑再重绑"
     attr_accessor :bound_listeners
 
     def initialize(type, props = {}, block = nil, owner: nil)
