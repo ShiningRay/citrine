@@ -1,5 +1,7 @@
 # Citrine（黄水晶）
 
+[![CI](https://github.com/ShiningRay/citrine/actions/workflows/ci.yml/badge.svg)](https://github.com/ShiningRay/citrine/actions/workflows/ci.yml)
+
 用 Ruby 写信号式响应 UI，经 Opal 编译后渲染到 Web、桌面与移动端。
 愿景、架构决策与路线图见 [GOALS.md](GOALS.md)。
 （历史记录中的工作代号 RV 指同一项目。）
