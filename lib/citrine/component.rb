@@ -97,6 +97,16 @@ module Citrine
       emit(:box, props, &block)
     end
 
+    # 布局语法糖（G-8）：方向必须显式——避免"忘了写 direction 的 box"在真机上塌掉
+    # （box 的默认方向仍是 CSS 的 row；未声明方向的 box 会在开发模式下被提醒）
+    def stack(**props, &block)
+      emit_directional(:column, props, &block)
+    end
+
+    def row(**props, &block)
+      emit_directional(:row, props, &block)
+    end
+
     def label(**props, &block)
       emit(:label, props, &block)
     end
@@ -153,6 +163,16 @@ module Citrine
       node = Node.new(type, props, block, owner: self)
       Citrine.renderer.mount(node)
       node
+    end
+
+    # stack / row：方向由语法糖给定，再传 direction 属于自相矛盾，直接报错（fail fast）
+    def emit_directional(direction, props, &block)
+      if props.key?(:direction)
+        raise ArgumentError, "stack / row 已隐含方向（#{direction}），不要再传 direction；" \
+                             "需要自定义方向请用 box(direction: ...)"
+      end
+
+      emit(:box, props.merge(direction: direction), &block)
     end
   end
 end

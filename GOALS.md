@@ -313,6 +313,22 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 `font_size` / `flex_direction`（camelCase 输入经 `Citrine::Style` 归一化等价）。
 理由：一个 DSL 一种方言——JS 的 camelCase 只允许存在于渲染边界内部。
 
+### 布局方向：语法糖 + 开发期提醒（G-8，2026-09-14 增补）
+
+`box` 是通用容器，默认方向沿用 CSS 的 `row`。两类 dogfooding 应用都栽在这里：
+面板/网格忘了写 `direction: :column` → 真机上内容按行横排、容器塌成一条
+（行情终端 2px、电子表格 553×35），而 Node 桩断言全绿——**桩里没有布局引擎，
+这一整类事故在小程序里是隐形的**。两次踩中同一处，说明问题不在"注意点"，在默认值的表达能力。
+
+处置（不改默认值，避免破坏性变更）：
+
+- `stack { }` = 竖排（`direction: :column`），`row { }` = 横排（`direction: :row`）；
+  再传 `direction` 直接 `ArgumentError`（自相矛盾要 fail fast）
+- **开发模式**下，一次挂载中"未声明方向且**有多子节点**"的 `box` 会在控制台汇总提醒一次
+  （`Citrine.dev_mode`；`bin/citrine dev` 的页面由 dev_server 注入 `window.CITRINE_DEV` 自动置位，
+  生产构建不注入）。空容器/单子容器不会塌，不提醒——避免用噪音换信任
+- 默认值是否改为 `column` 留到 1.0 再评估（届时有语法糖兜底，迁移成本可控）
+
 ### React API 对照（Ruby 白送的红利）
 
 | React | Ruby 形态 | 说明 |
@@ -390,6 +406,8 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 | 2026-09-14 | **GitHub 化 + CI 全绿**：推送至 github.com/ShiningRay/citrine（public）；GitHub Actions 三件套——CI（Ruby 3.1-3.4 矩阵 + 编译/四桩 + macOS 打包冒烟）、Release（v* 标签构建 gem 附 Release，RUBYGEMS_API_KEY 配置后自动 push）、Dependabot（bundler + actions 周更）；附 Rakefile（test/stubs 任务） | Roadmap P2-10/11 提前落地；修复：CI 上打包需 bundle exec 解析 opal 可执行文件 |
 | 2026-09-14 | **仓库化 + gem 0.1.0**：代码迁入独立 citrine/ 仓库（git init，首次提交 41 文件），gemspec + version + MIT LICENSE + .gitignore 就绪，`gem build` 通过（citrine-0.1.0.gem，21.5KB，未发布）；决策 #7 包结构定案：v1 单 gem，**npm 不做** | 源语言 Ruby → RubyGems 为唯一分发渠道；npm 的唯一例外是 P1 运行时拆分时的 citrine-runtime 预编译资产 |
 | 2026-09-14 | **响应式属性（G-2）落地**：props 的值传 Proc 即声明"响应式属性"，在该节点自己的 Effect 内求值（白名单 `css_class`/`placeholder`/`style`/`direction`/`gap`）；DOM 侧 `apply_props` 改为幂等、事件绑定拆到新钩子 `bind_events`，重跑只重设属性、不重建子树；消失的内联样式键显式清空；SSR 只求值一次，Canvas 绘制时求值。新增示例 `reactive_props` + 12 项桩断言（含"兄弟/目标 DOM 未被重建"） | 第二辑 FRICTION（电子表格 dogfooding）的 P0：props 求值位置决定订阅范围，一处看不见的 5~10 倍重绘；Roadmap P0-1 的"props 响应式传播"由此先行落地，嵌套/keyed 复用仍待做 |
+
+| 2026-09-14 | **布局方向：语法糖 + 开发期提醒（G-8）**：新增 `stack { }`（竖排）/ `row { }`（横排）语法糖（再传 `direction` 直接报错）；新增 `Citrine.dev_mode`，`bin/citrine dev` 由 dev_server 注入 `window.CITRINE_DEV` 自动置位，开发模式下对"未声明方向且有多子节点"的 `box` 在每次挂载后汇总提醒一次。示例改用 `stack`/`row` | 两类 dogfooding 应用各栽一次同一坑（面板/网格塌成一条），且**桩里没有布局引擎、测不出**——说明这不是"注意点"而是默认值的表达能力问题；不改默认值以免破坏性变更，1.0 再评估 |
 
 ## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
 
