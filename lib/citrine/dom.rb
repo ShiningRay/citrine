@@ -58,14 +58,57 @@ module Citrine
       style.each { |key, value| el[:style][Style.camel(key)] = value.to_s }
     end
 
-    # 事件监听只在挂载时绑定一次（不参与响应式属性重跑）
+    # 事件监听只在挂载时绑定一次（不参与响应式属性重跑）。
+    # 注意：每个处理器用独立局部变量——block 捕获的是变量本身，复用变量会让先绑定的
+    # 回调读到后来被覆盖的值（桩验收抓过一次真 bug）。
     def bind_events(node)
-      handler = node.props[:on_click]
-      return unless handler
+      owner = node.owner
 
-      node.dom.addEventListener("click", ->(event) {
-        node.owner.handle_event(handler, Native(event))
-      })
+      on_click = node.props[:on_click]
+      if on_click
+        node.dom.addEventListener("click", ->(event) { owner.handle_event(on_click, Native(event)) })
+      end
+
+      on_key = node.props[:on_key]
+      if on_key
+        node.dom.addEventListener("keydown", ->(event) { owner.handle_key(on_key, key_event(event)) })
+      end
+
+      on_focus = node.props[:on_focus]
+      if on_focus
+        node.dom.addEventListener("focus", ->(event) { owner.handle_event(on_focus, Native(event)) })
+      end
+
+      on_blur = node.props[:on_blur]
+      if on_blur
+        node.dom.addEventListener("blur", ->(event) { owner.handle_event(on_blur, Native(event)) })
+      end
+    end
+
+    # 全局键盘（G-9）：window 级 keydown，绑定组件生命周期（卸载时由 unmount_component 解绑）
+    def register_window_key(component, handler)
+      win = Native(`window`)
+      listener = ->(event) { component.handle_key(handler, key_event(event)) }
+      win.addEventListener("keydown", listener)
+      @window_keys ||= {}
+      (@window_keys[component] ||= []) << listener
+    end
+
+    def unregister_window_keys(component)
+      listeners = @window_keys && @window_keys.delete(component)
+      return unless listeners
+
+      win = Native(`window`)
+      listeners.each { |listener| win.removeEventListener("keydown", listener) }
+    end
+
+    # 原生事件 → Citrine::KeyEvent（平台无关视图；需要的原生细节走 #raw）
+    def key_event(event)
+      ev = Native(event)
+      KeyEvent.new(ev[:key],
+                   shift: ev[:shiftKey] == true, meta: ev[:metaKey] == true,
+                   ctrl: ev[:ctrlKey] == true, alt: ev[:altKey] == true,
+                   raw: ev, prevent_default: -> { ev.preventDefault })
     end
 
     def set_text(node, text)

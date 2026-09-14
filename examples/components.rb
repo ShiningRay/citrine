@@ -82,9 +82,10 @@ class TodoApp < Citrine::Component
       end
       label(style: { color: "#6b7280", font_size: "13px" }) { "待办 · 剩余 #{remaining} / #{items.size}" }
 
-      box(direction: :row, gap: 10) do
+      row(gap: 10) do
         text_input(value: signal(:draft), placeholder: "写点什么，回车或点添加…",
-                   on_enter: :add, css_class: "rv-input", style: INPUT)
+                   on_enter: :add, css_class: "rv-input", style: INPUT,
+                   on_key: { "Escape" => :clear_draft })
         button(on_click: :add, css_class: "rv-add", style: ADD_BTN) { "添加 ↵" }
       end
 
@@ -125,6 +126,11 @@ class TodoApp < Citrine::Component
     self.draft = ""
   end
 
+  # on_key: { "Escape" => :clear_draft }（G-9：元素级键盘，处理器拿到 KeyEvent）
+  def clear_draft
+    self.draft = ""
+  end
+
   def toggle(idx, val)
     self.items = items.each_with_index.map { |t, i| i == idx ? { text: t[:text], done: val } : t }
   end
@@ -140,10 +146,24 @@ end
 # 每次点击整块重建（写起来看不出差别，只能在性能上体现）。
 class SelectionGrid < Citrine::Component
   CELLS = (0...5).freeze
+  # 全局键盘（G-9）：← → 移动选中；监听绑定组件生命周期，卸载时自动解绑
+  window_key :navigate
   state :selected, default: 0
 
+  def navigate(ev)
+    case ev.key
+    when "ArrowRight" then self.selected = [selected + 1, CELLS.last].min
+    when "ArrowLeft"  then self.selected = [selected - 1, CELLS.first].max
+    end
+  end
+
+  # G-10：卸载整棵组件树（跑 on_unmount、解绑全局键盘、销毁所有 Effect）
+  def unmount_demo
+    Citrine.unmount(self)
+  end
+
   def view
-    stack(gap: 8, style: { font_family: "sans-serif", width: "360px" }) do
+    stack(gap: 8, style: { font_family: "sans-serif", width: "420px" }) do
       label(style: { font_size: "16px", font_weight: "600" }) { "选中：格 #{selected}" }
       row(gap: 6) do
         CELLS.each do |i|
@@ -161,8 +181,11 @@ class SelectionGrid < Citrine::Component
           ) { label(style: { font_size: "13px" }) { "格 #{i}" } }
         end
       end
-      label(style: { color: "#64748b", font_size: "12px" }) do
-        "点格子：只有两格的属性被重设，DOM 节点零重建"
+      row(gap: 8, style: { align_items: "center" }) do
+        label(style: { color: "#64748b", font_size: "12px" }) do
+          "← → 移动选中（window_key）；点格子只重设两格属性，DOM 零重建"
+        end
+        button(on_click: :unmount_demo, style: { font_size: "12px" }) { "卸载" }
       end
     end
   end

@@ -25,6 +25,12 @@ const app = makeEl("div");
 global.window = global;
 global.document = { getElementById: () => app, createElement: (t) => makeEl(t) };
 
+// window 级监听（G-9 的 window_key）：Node 的 global 本身没有 addEventListener，补最小实现
+const windowListeners = {};
+global.addEventListener = (ev, fn) => { (windowListeners[ev] = windowListeners[ev] || []).push(fn); };
+global.removeEventListener = (ev, fn) => { windowListeners[ev] = (windowListeners[ev] || []).filter((f) => f !== fn); };
+function fireWindow(ev, event) { (windowListeners[ev] || []).forEach((fn) => fn(event || {})); }
+
 require(`./${which}.js`);
 
 // ── 断言工具 ─────────────────────────────────────────────
@@ -85,7 +91,22 @@ if (which === "counter") {
   assert("整棵子树节点数不变", after.length, before.length);
   assert("旧格消失的样式键被清空", after[0].style.boxShadow, "");
   assert("新选中格拿到描边", after[2].style.boxShadow, "0 0 0 2px #f59e0b");
-} else {
+
+  // G-9：window_key —— 全局 ← → 移动选中（处理器拿到归一化的 KeyEvent）
+  fireWindow("keydown", { key: "ArrowRight" });
+  assert("→ 前进一格", status(), "选中：格 3");
+  fireWindow("keydown", { key: "ArrowLeft" });
+  fireWindow("keydown", { key: "ArrowLeft" });
+  assert("← 两次回退到格 1", status(), "选中：格 1");
+  assert("键盘移动同样只重设属性", after[1] === cells()[1] && cells()[1].className, "cell on");
+
+  // G-10：卸载 —— 跑 on_unmount、清理 DOM、解绑全局键盘
+  findButton(app, "卸载").fire("click");
+  assert("卸载后 DOM 清空", app.children.length, 0);
+  assert("卸载后 window 监听解绑", (windowListeners.keydown || []).length, 0);
+  fireWindow("keydown", { key: "ArrowRight" });
+  assert("卸载后按键不再有反应", app.children.length, 0);
+} else if (which === "todo") {
   const summary = () => texts(app).find((t) => t.startsWith("待办"));
   const input = findAll(app, "input").find((i) => i._listeners.input);
   const addButton = findButton(app, "添加 ↵");
@@ -101,6 +122,12 @@ if (which === "counter") {
   addButton.fire("click");
   assert("添加两条后统计", summary(), "待办 · 剩余 2 / 2");
   assert("输入框已清空", input.value, "");
+
+  // G-9：元素级键盘 on_key: { "Escape" => :clear_draft }
+  input.value = "临时草稿";
+  input.fire("input");
+  input.fire("keydown", { key: "Escape" });
+  assert("Esc 清空输入框", input.value, "");
 
   // 勾选第一条
   const box1 = findAll(app, "input").find((i) => i._listeners.change);

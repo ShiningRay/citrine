@@ -171,6 +171,15 @@ ruby -run -e httpd . -p 4401
 
 ### 框架备忘
 
+- **键盘：元素级 + 全局（G-9）**：元素上写 `on_key:`——Symbol/Proc 直接收事件，哈希形式按 key 查表
+  （`on_key: { "Escape" => :clear_draft, else: :fallback }`）；焦点相关用 `on_focus:` / `on_blur:`。
+  键盘优先应用要的全局快捷键用类宏 `window_key :handler` 声明（window 级 keydown，
+  **随组件卸载自动解绑**）。处理器拿到的是平台无关的 `Citrine::KeyEvent`：
+  `key` / `shift?` / `meta?` / `ctrl?` / `command?` / `prevent_default` / `raw`。
+- **生命周期（G-10）**：类宏 `on_mount :focus_editor`（DOM 就位后执行）与 `on_unmount { stop_timer }`，
+  子类继承父类声明、按声明顺序执行；`ref: :editor` 把元素句柄登记到 `component.refs[:editor]`
+  （DOM 下即元素本身，可直接 `.focus`）；`Citrine.unmount(component)` 卸载整棵组件树——
+  销毁所有 Effect、跑 `on_unmount`、清空 refs、解绑全局键盘。
 - **布局方向必须显式**：`box` 的默认方向是 CSS 的 row（横排），而面板/网格这类容器绝大多数要竖排——
   忘了写方向时，真机上会"塌成一条"（行情终端面板塌成 2px、电子表格网格 553×35），
   而**桩里没有布局引擎，测不出来**。因此提供语法糖：`stack { }` = 竖排，`row { }` = 横排

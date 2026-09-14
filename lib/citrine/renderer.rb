@@ -39,10 +39,29 @@ module Citrine
       Citrine.renderer = self
       @undirected_boxes = 0
       root = Node.new(:root, {}, nil, owner: component)
+      attach_root_ref(component, root)
       setup_root(root, element)
       run_view(root, component)
       finalize(root)
       warn_undirected_boxes
+      register_window_keys(component)
+      component.run_mount_hooks if component.respond_to?(:run_mount_hooks)
+      root
+    end
+
+    # 卸载：销毁整棵子树（含每个节点的 Effect 订阅）、解绑全局键盘、跑 on_unmount。
+    # root 自身留着（root.dom 就是页面上那个挂载容器，不属于组件），只清空内容。
+    def unmount_component(root)
+      root.children.dup.each { |child| dispose(child) }
+      root.children.clear
+      root.owned_effects.each(&:dispose)
+      root.owned_effects.clear
+
+      component = root.owner
+      if component.respond_to?(:run_unmount_hooks)
+        unregister_window_keys(component)
+        component.run_unmount_hooks
+      end
       root
     end
 
@@ -56,6 +75,7 @@ module Citrine
 
       node.dom = create_dom(node)
       warn_unreactive_proc(node)
+      register_ref(node)
       parent.children << node
       attach(node, parent)
       bind_events(node)
@@ -204,6 +224,30 @@ module Citrine
            "本提示只在开发模式出现。"
     end
 
+    # ── 生命周期与全局键盘（G-9 / G-10）────────────────────
+
+    # 组件与它的根节点/渲染器互相记住：卸载时才知道该拆哪棵树
+    def attach_root_ref(component, root)
+      return unless component.respond_to?(:root=)
+
+      component.root = root
+      component.renderer = self if component.respond_to?(:renderer=)
+    end
+
+    # ref: :name → component.refs[:name] = 平台句柄（DOM 下是元素本身）
+    def register_ref(node)
+      name = node.props[:ref]
+      return unless name && node.owner.respond_to?(:refs)
+
+      node.owner.refs[name] = node.dom
+    end
+
+    def register_window_keys(component)
+      return unless component.respond_to?(:run_unmount_hooks)
+
+      component.class.window_key_handlers.each { |handler| register_window_key(component, handler) }
+    end
+
     # ── 平台钩子 ───────────────────────────────────────────
 
     def reactive?
@@ -234,6 +278,15 @@ module Citrine
 
     # 绑定事件监听（只在挂载时调用一次，不参与响应式重跑）
     def bind_events(_node)
+      nil
+    end
+
+    # 全局键盘（window 级）：DOM 渲染器实现；其它平台默认无操作
+    def register_window_key(_component, _handler)
+      nil
+    end
+
+    def unregister_window_keys(_component)
       nil
     end
 

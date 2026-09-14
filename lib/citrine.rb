@@ -24,6 +24,17 @@ module Citrine
       renderer.mount_component(component, element)
     end
 
+    # 卸载一个已挂载的组件（会跑 on_unmount、解绑全局键盘、销毁所有 Effect）
+    def unmount(component)
+      root = component.respond_to?(:root) ? component.root : component
+      raise ArgumentError, "Citrine.unmount：组件尚未挂载（root 为空）" unless root
+
+      renderer = component.respond_to?(:renderer) && component.renderer ? component.renderer : self.renderer
+      raise "Citrine.unmount：找不到挂载这个组件的渲染器" unless renderer
+
+      renderer.unmount_component(root)
+    end
+
     # render-to-string（纯 CRuby 可用）
     def render(component)
       require_relative "citrine/string_renderer"
@@ -34,6 +45,7 @@ end
 
 require_relative "citrine/version"
 require_relative "citrine/signal"
+require_relative "citrine/key_event"
 require_relative "citrine/node"
 require_relative "citrine/component"
 require_relative "citrine/renderer"
