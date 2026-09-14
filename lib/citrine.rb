@@ -35,18 +35,6 @@ module Citrine
       renderer.unmount_component(root)
     end
 
-    # DevTools 依赖图数据（T-B3）：开启埋点 → 返回当前 signal→effect 边与
-    # 各 Effect 的重跑计数快照（可 to_json）。UI 晚一步、数据先行；
-    # 关闭（debug_tracking = false）时零开销、不记录。
-    def debug_dependency_graph
-      Signal.debug_tracking = true
-      Effect.debug_tracking = true
-      {
-        signals: Signal.all.map(&:debug_info),
-        effects: Effect.all.reject(&:disposed?).map(&:debug_info)
-      }
-    end
-
     # render-to-string（纯 CRuby 可用）
     def render(component)
       require_relative "citrine/string_renderer"

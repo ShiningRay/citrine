@@ -92,6 +92,19 @@ task :browser do
   puts "  布局守卫通过：#{report.inspect}"
 end
 
+desc "生产产物断言（T-B3）：不 require citrine/debug 的产物不含埋点字符串"
+task :prod_check do
+  Dir.chdir("examples") do
+    sh "opal -c --no-source-map -I../lib -I. -o counter.js counter.rb"
+  end
+  body = File.read("examples/counter.js")
+  needles = ["debug_dependency_graph", "debug_tracking", "citrine/debug"]
+  needles.each do |needle|
+    raise "生产产物包含 DevTools 埋点字符串: #{needle}" if body.include?(needle)
+  end
+  puts "  生产产物无埋点字符串 ✓（#{needles.join(', ')}）"
+end
+
 desc "DOM/Canvas 等价断言（T-B2）：同一 Counter 组件双渲染器输出，文本序列与布局守卫"
 task :canvas_parity do
   chrome = ENV["CHROME_BIN"] || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"

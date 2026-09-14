@@ -61,6 +61,8 @@ jobs:
         run: bundle exec rake size
       - name: source map 指回 .rb
         run: bundle exec rake map_check
+      - name: 生产产物无埋点字符串（T-B3）
+        run: bundle exec rake prod_check
       - name: 框架专属 lint（Citrine/NoRawIvarAssignment）
         run: bundle exec rake lint
 
