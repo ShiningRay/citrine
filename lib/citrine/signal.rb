@@ -57,6 +57,7 @@ module Citrine
       @value = value
       @init = init
       @subs = []
+      Signal.track(self) if Signal.debug_tracking
     end
 
     def get
@@ -64,6 +65,23 @@ module Citrine
       effect&.depend(self)
       run_init if @init
       @value
+    end
+
+    # DevTools 埋点（T-B3）：当前存活订阅者数
+    def debug_info
+      { id: object_id, subscribers: @subs.size }
+    end
+
+    class << self
+      attr_accessor :debug_tracking
+
+      def all
+        @all ||= []
+      end
+
+      def track(signal)
+        all << signal if debug_tracking
+      end
     end
 
     # 读值但**不订阅**：只想拿一份快照、不想让当前 Effect 依赖它时用（MobX 的 untracked）。
@@ -138,7 +156,20 @@ module Citrine
   # 每次重跑前先解除全部旧依赖、按新一次读取重建（MobX 式追踪），
   # 因此条件分支切换后，未再读取的信号不再触发本 Effect。
   class Effect
+    # ── DevTools 埋点（T-B3）：依赖图数据层 ────────────────────
+    # 默认关闭、零开销；Citrine.debug_dependency_graph 开启后记录
+    # 存活的 Effect（id / 依赖的信号 / 重跑计数），UI 晚一步、数据先行。
     class << self
+      attr_accessor :debug_tracking
+
+      def all
+        @all ||= []
+      end
+
+      def track(effect)
+        all << effect if debug_tracking
+      end
+
       def stack
         @stack ||= []
       end
@@ -161,11 +192,14 @@ module Citrine
       @track_cleanup = track_cleanup
       @cleanup = nil
       @deps = []
+      @runs = 0
+      Effect.track(self) if Effect.debug_tracking
     end
 
     def run
       return self if @deps.nil? # 已 dispose 的 effect 保持惰性（广播快照中可能仍被迭代到）
 
+      @runs += 1
       call_cleanup # 重跑前先清上一轮申请的资源（订阅还在，清理时读得到新鲜值）
       release_deps
       self.class.stack.push(self)
@@ -190,8 +224,20 @@ module Citrine
     end
 
     def depend(signal)
+      return if @deps.any? { |d| d.equal?(signal) } # 同一信号读多次只记一条依赖边
+
       @deps << signal
       signal.subscribe(self)
+    end
+
+    # 已 dispose 的 Effect（诊断/DevTools 用）
+    def disposed?
+      @deps.nil?
+    end
+
+    # DevTools 埋点（T-B3）：依赖的信号（object_id 边）与重跑计数
+    def debug_info
+      { id: object_id, deps: (@deps || []).map(&:object_id), runs: @runs, disposed: disposed? }
     end
 
     private
