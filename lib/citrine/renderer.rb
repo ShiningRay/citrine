@@ -124,7 +124,7 @@ module Citrine
       child_props = props.reject { |name, _| name == :key }
       identity = [:component, klass]
 
-      if (existing = reusable_node(key, identity, child_props))
+      if (existing = reusable_node(key, identity, child_props, owner))
         child = existing.rendered_component
         child.update_props(child_props) if component.is_a?(Class) && child.respond_to?(:update_props)
         return refresh_component_view(existing, child, identity, key, child_props)
@@ -187,11 +187,11 @@ module Citrine
 
     # 复用匹配：key 优先，没有 key 时按"本次第几个子节点"对位（React 的隐含位置 key）。
     # 命中后节点按新顺序重新排位。返回 nil 表示"不匹配，应新建"。
-    def reusable_node(key, identity, props)
+    def reusable_node(key, identity, props, requester)
       pool = @reuse_pools.last
       return nil unless pool
 
-      node = pool.take(key, identity, props)
+      node = pool.take(key, identity, props, requester)
       return nil unless node
 
       # 复用的节点要重新计入当前父的子节点表（本轮开始时已清空），顺序由追加次序决定
@@ -259,7 +259,12 @@ module Citrine
       # key 优先；没有 key 时按"本次第几个子节点"对位匹配（React 的隐含位置 key）。
       # 同一个节点有两种身份：元素身份（自身）与组件根身份（它是某子组件的根）——
       # 父组件按组件身份匹配、子组件 view 重跑时按元素身份匹配，两者指向同一节点。
-      def take(key, identity, props)
+      #
+      # requester = 本次正在渲染的组件（emit 的 owner）。**元素槽位只认这个组件自己的节点**：
+      # 跨组件复用会让 refresh_node 沿用旧节点的 Effect，而 Effect 里是
+      # `node.owner.instance_exec(&node.block)`——owner 不跟着换，新块就在老 self 上跑。
+      # （同一位置换组件类型、或新组件的根按位置抢到旧组件的根，都会踩到。）
+      def take(key, identity, props, requester)
         @cursor += 1
         candidate = if key
                       register!(key)
@@ -270,12 +275,14 @@ module Citrine
         return nil unless candidate
         return nil if @taken.key?(candidate.object_id)
 
-        expected = if identity.first == :component
-                     candidate.component_identity == identity ? candidate.component_props : nil
-                   else
-                     candidate.identity == identity ? candidate.props : nil
-                   end
-        return nil unless expected && same_props?(expected, props)
+        if identity.first == :component
+          # 组件槽位：候选就是**旧组件**的根，owner 天然属于那个子组件，故只比组件身份与 props
+          return nil unless candidate.component_identity == identity && same_props?(candidate.component_props, props)
+        else
+          # 元素槽位：keyed 与位置匹配都要求"由同一个组件渲染出来的节点"
+          return nil unless candidate.owner.equal?(requester)
+          return nil unless candidate.identity == identity && same_props?(candidate.props, props)
+        end
 
         @taken[candidate.object_id] = candidate
         candidate

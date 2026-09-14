@@ -60,9 +60,10 @@ build/CitrineCounter.app/Contents/MacOS/CitrineCounter --dev http://localhost:44
 （`counter.html` / `todo.html`）、CRuby SSR（`ssr_demo.rb`）、浏览器 Canvas
 （`canvas_counter.html` / `canvas_todo.html`）。
 
-v1 已知限制：列表为块级整体重建（无 keyed 复用）；集合为整体替换语义
-（`self.items = ...`）；组件 props 为创建时快照；SSR 为一次性渲染且不序列化
-事件；Canvas 输入用 window.prompt（演示级）、布局为线性 stack/flow。
+v1 已知限制：组件 props 为创建时快照；SSR 为一次性渲染且不序列化事件；
+Canvas 输入用 window.prompt（演示级）、布局为线性 stack/flow。
+列表已有 keyed 复用（`key:` 命中即复用节点与实例）；集合用 `Citrine.signal_list([...])`
+（集合自身的每次变更都是一次通知，`get` 返回冻结快照）。
 
 M1 落地的 API（决策 #3 定案形态）：
 
@@ -85,8 +86,8 @@ class Counter < Citrine::Component
 end
 ```
 
-v1 已知限制：列表为块级整体重建（无 keyed 复用）；集合为整体替换语义
-（`self.items = ...`）；组件 props 为创建时快照。
+v1 已知限制：组件 props 为创建时快照（S2 会信号化）。列表 keyed 复用与
+`Citrine.signal_list` 集合 API 均已落地。
 
 ## 目录
 
@@ -95,6 +96,7 @@ v1 已知限制：列表为块级整体重建（无 keyed 复用）；集合为�
 ├── lib/
 │   ├── citrine.rb        # 入口：装配 + Citrine.mount / Citrine.unmount / Citrine.render
 │   ├── citrine/signal.rb # Signal / Effect（平台无关，CRuby 可测）
+│   ├── citrine/reactive.rb # 给普通类的小混入：include 后可用 signal(...)
 │   ├── citrine/num.rb    # 跨平台数值工具（idiv / round_to / integral? / finite? …）
 │   ├── citrine/key_event.rb # 键盘事件（平台无关视图；G-9）
 │   ├── citrine/node.rb   # 元素树节点（平台无关）
@@ -178,8 +180,10 @@ ruby -run -e httpd . -p 4401
    （JS `Math.round` 朝 +∞；上游修复见 opal/opal#2808）。要跨平台一致请用
    `Citrine::Num.round_to(value, digits)`——它先取绝对值再贴符号。
 3. **`Signal` 名字遮蔽**：Ruby/Opal 标准库里另有 `::Signal`（进程信号类）。在组件里写裸
-   `Signal.new(...)` 会拿到那个空类并报 `undefined method 'get'`——请始终写全限定名
-   `Citrine::Signal`，或使用 `state` 宏。
+   `Signal.new(...)` 会拿到那个空类并报 `undefined method 'get'`——**不要写出裸名字**：
+   组件内用 `state` 宏、组件外（领域模型/测试）用 `Citrine.signal(...)`，或给普通类
+   `include Citrine::Reactive` 后直接写 `signal(...)`；组件内要"按 key 记忆的信号表"用
+   `keyed_signal(:name, key) { 初值 }`。确实要拿类本身时写全限定名 `Citrine::Signal`。
 4. **可变字符串方法不存在**：`String#<<` / `#gsub!` / `#[]=` 在 Opal 下抛
    `NotImplementedError`（上游明文记录的设计选择：字符串不可变）。累积字符串用
    `buffer = buffer + ch` 或数组 `join`。
@@ -199,9 +203,30 @@ ruby -run -e httpd . -p 4401
    成因是 `opal/corelib/number.rb` 的 `Integer#**` 把 `other > 0` 当成了"整数快路径"的条件
    ——指数为 0 也被归进负指数（Rational）分支。`Citrine::Num` 内部已绕开；
    上游修复已另提（同 `Float#round` 的处置路径）。
+10. **给固定 arity 的方法多传实参，Opal 不报错只是静默丢弃**：`on_mount :a, :b` 在 CRuby 抛
+    `ArgumentError`，在 Opal 下不报错、**只跑第一个**——表现为"某个副作用凭空消失"
+    （dogfooding 实测：网格 ticker 没了，症状是闪烁永不清零，排查成本极高）。框架的
+    生命周期宏已改成可变参数；写自己的宏/方法时也要注意：**别依赖"多传会报错"来兜底**，
+    Opal 下这类错误不会浮出来。根治办法是让签名接收可变参数并自己校验实参。
 
 ### 框架备忘
 
+- **创建信号（A/B/C/D 四个入口）**：组件内首选 `state` / `computed`；组件外与"按 key 记忆"场景：
+  （另有 `peek`：读值但**不订阅**——`get` 会把"取值"与"订阅"绑在一起，只想拿一份快照时用它；
+  ListSignal 的 `peek` 同样返回冻结快照）
+  - `Citrine.signal(0)` / `Citrine.signal { 惰性初值 }` —— 到处可用（领域模型、测试），
+    且**不必写出裸的 `Signal`**（会撞 stdlib 的 `::Signal`，见陷阱 3）
+  - `include Citrine::Reactive` → 普通类里直接 `signal(0)`（组件不要 include：组件已有
+    同名的 `signal(name)`，语义是"取已声明 state 的底层信号"）
+  - `keyed_signal(:view, [row, col]) { { selected: false } }` —— 组件内按 (name, key) 记忆的
+    信号表，替代到处手写 `@xxx[key] ||= Citrine::Signal.new(...)`；初值块在本组件实例上求值
+  - `Citrine.signal_list([...])`（混入后 `signal_list([...])`）—— **响应式集合**：`<<` / `push` /
+    `delete_at` / `replace` / `sort!` … 每次变更即一次通知（内部换新数组，触发路径仍只有
+    `Signal#set` 一条）；`get` 返回**冻结**快照，`rows.get << x` 会当场 `FrozenError`
+    而不是静默不更新；读操作（`size` / `each` / `map` / `include?` …）在块内读会建立依赖
+    另外：`include Enumerable`（`find` / `select` / `count` / `min` / `max` / `sum` / `sort_by` … 都能用）、
+    `push_bounded(x, limit)` / `unshift_bounded(x, limit)`（有上限的列表**一次通知**，别写 `<<` 再 `shift`）、
+    `dup` 得到集合副本（不是克隆信号对象）、`signal_list(Hash)` 与 `signal_list(42)` 当场报错
 - **键盘：元素级 + 全局（G-9）**：元素上写 `on_key:`——Symbol/Proc 直接收事件，哈希形式按 key 查表
   （`on_key: { "Escape" => :clear_draft, else: :fallback }`）；焦点相关用 `on_focus:` / `on_blur:`。
   键盘优先应用要的全局快捷键用类宏 `window_key :handler` 声明（window 级 keydown，

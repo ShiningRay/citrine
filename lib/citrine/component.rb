@@ -126,13 +126,18 @@ module Citrine
       end
 
       # 挂载完成后执行（DOM 已就位）：适合 focus、定时器、第三方库初始化
-      def on_mount(handler = nil, &block)
-        mount_hooks << (block || handler)
+      #
+      # 一次可声明多个：`on_mount :a, :b` / `on_mount :a { ... }` / 只给块。
+      # 之所以用可变参数而不是单参数：**Opal 下给固定 arity 的方法多传实参不会报错**，
+      # 只是静默丢弃——CRuby 抛 ArgumentError、Opal 少跑一个钩子，是最难查的一类
+      # 平台间语义分叉（dogfooding 实测：网格 ticker 因此消失，症状是"闪烁永不清零"）。
+      def on_mount(*handlers, &block)
+        mount_hooks.concat(collect_hooks(:on_mount, handlers, block))
       end
 
-      # 组件销毁时执行：清理定时器、监听器、未完成的请求
-      def on_unmount(handler = nil, &block)
-        unmount_hooks << (block || handler)
+      # 组件销毁时执行：清理定时器、监听器、未完成的请求（同样可一次声明多个）
+      def on_unmount(*handlers, &block)
+        unmount_hooks.concat(collect_hooks(:on_unmount, handlers, block))
       end
 
       # 声明一个 window 级键盘处理器（Symbol 或 Proc）；卸载时自动解绑
@@ -143,6 +148,21 @@ module Citrine
       #   end
       def window_key(handler)
         window_key_handlers << handler
+      end
+
+      private
+
+      # on_mount / on_unmount 的参数归一：Symbol / Proc / 块；至少给一个，否则 fail fast
+      def collect_hooks(name, handlers, block)
+        hooks = block ? handlers + [block] : handlers
+        raise ArgumentError, "#{name} 需要至少一个处理器（Symbol / Proc / 块）" if hooks.empty?
+
+        hooks.each do |hook|
+          next if hook.is_a?(Symbol) || hook.is_a?(Proc)
+
+          raise ArgumentError, "#{name} 的处理器只能是 Symbol 或 Proc，收到 #{hook.inspect}"
+        end
+        hooks
       end
     end
 
@@ -174,6 +194,23 @@ module Citrine
 
     def signals
       @signals ||= {}
+    end
+
+    # 按 key 取用的信号表（组件内）：同一个 (name, key) 只会建一个信号，
+    # 用于"每行 / 每格 / 每个标的都有自己的信号"这类场景，替代到处手写
+    # `@xxx[key] ||= Citrine::Signal.new(...)`：
+    #
+    #   def view_signal(row, col) = keyed_signal(:view, [row, col]) { { selected: false } }
+    #
+    # 初值函数在**本组件实例**上求值（可以读 state / 调用自己的方法）；给块则在该 key
+    # 第一次被取用时求值一次。表按 name 分开，互不干扰。
+    def keyed_signal(name, key, &init)
+      table = (keyed_signals[name] ||= {})
+      table[key] ||= Signal.new(init ? instance_eval(&init) : nil)
+    end
+
+    def keyed_signals
+      @keyed_signals ||= {}
     end
 
     # 父组件重传 props（嵌套复用时的就地更新，P0-1/S1）：
@@ -319,7 +356,7 @@ module Citrine
 
     def emit(type, props, &block)
       # keyed 复用：命中旧节点就沿用（DOM / 子树 / Effect 全保留）
-      if (existing = Citrine.renderer.reusable_node(props[:key], [:element, type], props))
+      if (existing = Citrine.renderer.reusable_node(props[:key], [:element, type], props, self))
         return Citrine.renderer.refresh_node(existing, props, block)
       end
 
