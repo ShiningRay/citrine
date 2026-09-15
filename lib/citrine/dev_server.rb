@@ -23,7 +23,7 @@ require "open3"
 require "tmpdir"
 require "tempfile"
 
-require "citrine/theme" # 样式资产注册表（Citrine.css / css_text）
+require_relative "theme" # 样式资产注册表（Citrine.css / css_text）
 
 module Citrine
   class DevServer
