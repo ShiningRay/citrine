@@ -52,4 +52,42 @@ class PackagerPureTest < Minitest::Test
     assert_kind_of String, bin
     assert_equal "opal", File.basename(bin)
   end
+
+  def test_parse_args_name_only
+    assert_equal ["counter", "examples", [], nil], Citrine::Packager.parse_args(["counter"])
+  end
+
+  def test_parse_args_dir_and_repeatable_includes
+    name, dir, extra_libs, app_name = Citrine::Packager.parse_args(
+      ["desktop", "../emerald/examples", "-I", "../beryl/lib", "-I../emerald/lib"]
+    )
+
+    assert_equal "desktop", name
+    assert_equal "../emerald/examples", dir
+    assert_equal ["../beryl/lib", "../emerald/lib"], extra_libs
+    assert_nil app_name
+  end
+
+  def test_parse_args_app_name_override
+    _name, _dir, _extra_libs, app_name = Citrine::Packager.parse_args(["desktop", "-n", "Emerald"])
+
+    assert_equal "Emerald", app_name
+  end
+
+  def test_parse_args_missing_include_value_raises
+    assert_raises(ArgumentError) { Citrine::Packager.parse_args(["counter", "-I"]) }
+  end
+
+  def test_app_name_override_wins_over_derivation
+    packager = Citrine::Packager.new("desktop", dir: "examples", app_name: "Emerald")
+
+    assert_equal "Emerald", packager.instance_variable_get(:@app_name)
+  end
+
+  def test_extra_libs_expanded_to_absolute_paths
+    packager = Citrine::Packager.new("desktop", dir: "examples", extra_libs: ["../beryl/lib"])
+
+    assert_equal [File.expand_path("../beryl/lib")],
+                 packager.instance_variable_get(:@extra_libs)
+  end
 end

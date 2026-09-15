@@ -10,21 +10,70 @@ require_relative "version"
 
 module Citrine
   class Packager
-    def self.run!(args)
-      if args.empty?
-        abort <<~USAGE
-          用法: bin/citrine package <示例名>
-          示例: bin/citrine package counter   # 打包 examples/counter
-        USAGE
+    # 命令行解析（纯函数，便于单测）：返回 [示例名, 目录, 额外加载路径, App 名]
+    # 形态对齐 DevServer.parse_args：-I 可重复（也支持 -I<path> 附着式）
+    def self.parse_args(args)
+      name = nil
+      dir = nil
+      app_name = nil
+      extra_libs = []
+      i = 0
+      while i < args.length
+        arg = args[i]
+        if arg == "-I"
+          value = args[i + 1]
+          raise ArgumentError, "-I 需要一个加载路径参数（如 -I ../some-lib/lib）" if value.nil? || value.start_with?("-")
+
+          extra_libs << value
+          i += 2
+        elsif arg.start_with?("-I")
+          extra_libs << arg[2..]
+          i += 1
+        elsif ["-n", "--name"].include?(arg)
+          value = args[i + 1]
+          raise ArgumentError, "-n 需要一个 App 名参数（如 -n Emerald）" if value.nil? || value.start_with?("-")
+
+          app_name = value
+          i += 2
+        elsif arg !~ /\A-/
+          if name.nil?
+            name = arg
+          elsif dir.nil?
+            dir = arg
+          else
+            warn "忽略多余参数 #{arg}"
+          end
+          i += 1
+        else
+          warn "未知参数 #{arg}，已忽略（用法：citrine package <示例名> [目录] [-I 加载路径]... [-n App名]）"
+          i += 1
+        end
       end
-      new(args.first).package
+      [name, dir || "examples", extra_libs, app_name]
     end
 
-    def initialize(name, dir: "examples")
+    def self.run!(args)
+      name, dir, extra_libs, app_name = parse_args(args)
+      if name.nil?
+        abort <<~USAGE
+          用法: bin/citrine package <示例名> [目录] [-I 加载路径]... [-n App名]
+          示例: bin/citrine package counter   # 打包 examples/counter
+                 bin/citrine package desktop ../emerald/examples -I ../beryl/lib -I ../emerald/lib -n Emerald
+        USAGE
+      end
+      new(name, dir: dir, extra_libs: extra_libs, app_name: app_name).package
+    rescue ArgumentError => e
+      abort e.message
+    end
+
+    def initialize(name, dir: "examples", extra_libs: [], app_name: nil)
       @name = name
       @dir = File.expand_path(dir)
       @root = File.expand_path("../..", __dir__)
-      @app_name = "Citrine" + @name.split("_").map(&:capitalize).join
+      @app_name = app_name || "Citrine" + @name.split("_").map(&:capitalize).join
+      # 额外加载路径（-I 可重复）：跨仓库示例（如组件库的 examples/）编译时
+      # 需要补上那个仓库的 lib；转绝对路径——编译 cwd 是源文件所在目录
+      @extra_libs = extra_libs.map { |p| File.expand_path(p) }
     end
 
     def package
@@ -74,11 +123,11 @@ module Citrine
     private
 
     def compile_js(rb, output)
+      includes = ["-I#{File.join(@root, 'lib')}", "-I#{@dir}"] + @extra_libs.map { |p| "-I#{p}" }
       # Windows 无法直接 spawn 无扩展名的 binstub（POSIX sh 脚本），经 Gem.ruby 调起
       command = Gem.win_platform? ? [Gem.ruby, opal_executable] : [opal_executable]
       out, err, status = Open3.capture3(
-        *command, "-c",
-        "-I#{File.join(@root, 'lib')}", "-I#{@dir}",
+        *command, "-c", *includes,
         "-o", output, File.basename(rb),
         chdir: @dir
       )
