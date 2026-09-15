@@ -95,17 +95,29 @@ task :browser do
   puts "  布局守卫通过：#{report.inspect}"
 end
 
-desc "生产产物断言（T-B3）：不 require citrine/debug 的产物不含埋点字符串"
+desc "生产产物断言（T-B3 + M1-5）：不 require citrine/debug 的产物不含埋点字符串"
 task :prod_check do
   Dir.chdir("examples") do
     sh "opal -c --no-source-map -I../lib -I. -o counter.js counter.rb"
   end
   body = File.read("examples/counter.js")
-  needles = ["debug_dependency_graph", "debug_tracking", "citrine/debug"]
+  # 红线（DESIGN-devtools 第六节）：新增探针的消息名/方法名必须同步加入断言清单。
+  # 覆盖三层探针面——对外入口方法名、环形缓冲访问器、prepend 模块名；
+  # test/debug_prod_check_test.rb 静态断言本清单与 lib/citrine/debug*.rb 的探针面同步。
+  needles = [
+    # T-B3 数据层：依赖图导出、总开关、实例诊断方法名、debug 加载路径
+    #（含 require_relative 各探针文件的全串）
+    "debug_dependency_graph", "debug_tracking", "debug_info", "citrine/debug",
+    # M1 时序探针（P1 写入日志 / P2 flush 轨迹 / P3 事件流 / P4 组件树）对外入口
+    "debug_write_log", "debug_flush_trace", "debug_event_stream", "debug_component_tree",
+    # 环形缓冲访问器（M1-1/2/3 共享契约）与 prepend 模块名——同一文件内第二重守门
+    "write_log_ring", "flush_trace_ring", "event_stream_ring",
+    "SignalWriteLog", "FlushTrace", "EventStream"
+  ]
   needles.each do |needle|
     raise "生产产物包含 DevTools 埋点字符串: #{needle}" if body.include?(needle)
   end
-  puts "  生产产物无埋点字符串 ✓（#{needles.join(', ')}）"
+  puts "  生产产物无埋点字符串 ✓（#{needles.size} 项：#{needles.join(', ')}）"
 end
 
 desc "DOM/Canvas 等价断言（T-B2）：同一 Counter 组件双渲染器输出，文本序列与布局守卫"
