@@ -11,3 +11,7 @@ gem "rubocop", require: false
 group :test, :development do
   gem "simplecov", ">= 0.21", require: false
 end
+
+# Windows 下 listen 的原生文件监听适配器：没有它 listen 退化为轮询，
+# dev server 热刷新常驻空转 CPU（macOS/Linux 用系统事件，不需要此 gem）
+gem "wdm", ">= 0.1.0", platforms: [:mswin, :windows], require: false if Gem.win_platform?
