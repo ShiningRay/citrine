@@ -202,8 +202,10 @@ module Citrine
       tmp = Tempfile.new(["rv_dev_#{Process.pid}", ".js"])
       # 与手工编译完全一致的形态：cwd = 源文件所在目录，-I附着式传参
       includes = ["-I#{File.join(@root, 'lib')}", "-I."] + @extra_libs.map { |p| "-I#{p}" }
+      # Windows 无法直接 spawn 无扩展名的 binstub（POSIX sh 脚本），经 Gem.ruby 调起
+      command = Gem.win_platform? ? [Gem.ruby, opal_executable] : [opal_executable]
       out, err, status = Open3.capture3(
-        opal_executable, "-c", *includes,
+        *command, "-c", *includes,
         "-o", tmp.path, File.basename(rb_full),
         chdir: File.dirname(rb_full)
       )
