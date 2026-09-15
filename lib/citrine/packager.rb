@@ -58,6 +58,7 @@ module Citrine
         puts "  开发模式: #{File.join(app_dir, "#{@app_name}.cmd")} --dev http://localhost:4402/#{@name}.html（需先 bin/citrine dev）"
       else
         macos_dir = File.join(app_dir, "Contents", "MacOS")
+        FileUtils.mkdir_p(macos_dir) # swiftc 不会自建输出目录（macOS 打包冒烟的 ld errno=2 即缺此）
         puts "[package] 编译 Swift 壳 …"
         exe = File.join(macos_dir, @app_name)
         swift_build(exe)
