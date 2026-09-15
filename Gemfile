@@ -9,5 +9,5 @@ gem "rubocop", require: false
 
 # 测试覆盖率（D4）：rake 时控制台输出覆盖率摘要（不上传外部服务，保持零外部依赖门禁）
 group :test, :development do
-  gem "simplecov", require: false
+  gem "simplecov", ">= 0.21", require: false
 end

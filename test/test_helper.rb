@@ -6,9 +6,9 @@
 begin
   require "simplecov"
   SimpleCov.start do
-    skip "/test/"
-    skip "/lib/rubocop/"
-    skip "/examples/"
+    add_filter "/test/"
+    add_filter "/lib/rubocop/"
+    add_filter "/examples/"
   end
 rescue LoadError
   # 并行开发或未 bundle install 时缺 simplecov：跳过覆盖率，不阻断测试
