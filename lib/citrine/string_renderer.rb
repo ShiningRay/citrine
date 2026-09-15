@@ -73,6 +73,8 @@ module Citrine
       out = []
       # 响应式属性在 SSR 侧只求值一次（无订阅、无重跑，与 DOM 输出保持一致）
       css_class = prop_value(node, node.props[:css_class])
+      # A7：数组形式与 DOM className 同口径——空格 join，不再渲染成 Ruby 字面量
+      css_class = css_class.join(" ") if css_class.is_a?(Array)
       # 属性值必须转义：值里出现引号会提前闭合属性，把数据变成新属性（属性注入）。
       out << %(class="#{escape_html(css_class)}") if css_class
       case node.type

@@ -22,9 +22,16 @@ jobs:
         with:
           ruby-version: "3.3"
           bundler-cache: true
-      - name: 单测与体积守卫
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: 安装 JS 工具链（T1：esbuild 是 rake size 的 dev 依赖，随 package-lock 钉版）
+        run: npm ci
+      - name: 发布门禁（T2：与 CI 对齐——单测 + 桩验收 + lint + 体积守卫）
         run: |
           bundle exec rake
+          bundle exec rake stubs
+          bundle exec rake lint
           bundle exec rake size
       - name: 构建 gem
         run: gem build citrine.gemspec

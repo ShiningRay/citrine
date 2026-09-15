@@ -1,16 +1,18 @@
 # 编译产物与打包输出
 /build/
 /tmp/
-/examples/counter.js
-/examples/todo.js
-/examples/reactive_props.js
-/examples/keyed_list.js
-/examples/props_widgets.js
-/examples/canvas_counter.js
-/examples/canvas_todo.js
-/examples/browser_check.js
-/examples/canvas_dom_parity.js
-/examples/canvas_wrap.js
+/examples/*.js
+# 桩脚本是源码不是产物（T4）
+!/examples/stub_check.js
+!/examples/canvas_stub_check.js
+# 测试装置编译产物（browser_check / canvas_dom_parity，D4 迁至 test/browser/）
+/test/browser/*.js
+# simplecov 覆盖率报告（D4，控制台摘要的 HTML 明细）
+/coverage/
+# 官网静态产物由 pages.yml 每次部署重建，不提交（T5）
+/website/dist/
+# JS 工具链（esbuild 仅供 rake size）
+/node_modules/
 *.gem
 Gemfile.lock
 

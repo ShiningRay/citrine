@@ -243,10 +243,16 @@ module Citrine
       return unless @root && @ctx
 
       @hits = []
+      # P1：本轮重绘的尺寸缓存。size_of 原本随 place 的前序遍历被逐层重复递归
+      # （复杂度 深度 × 节点数，叶子量测重复最狠）——每轮重绘只算一次、缓存命中即返回；
+      # ensure 里清空：样式 / props 变化后的下一轮重绘必须重新量测
+      @size_cache = {}
       @ctx.clearRect(0, 0, @root.dom[:w], @root.dom[:h])
       place(@root, 0, 0)
       paint(@root)
       sync_overlays
+    ensure
+      @size_cache = nil
     end
 
     def box?(node)
@@ -269,6 +275,9 @@ module Citrine
     def size_of(node)
       return [@root.dom[:w], @root.dom[:h]] if node.type == :root
 
+      # P1：命中本轮缓存直接返回——首次计算时已把尺寸写进 node.dom，place/paint 只读
+      return @size_cache[node.object_id] if @size_cache&.key?(node.object_id)
+
       if box?(node)
         direction, pad, gap = box_axes(node)
         sizes = node.children.map { |child| size_of(child) }
@@ -282,6 +291,7 @@ module Citrine
         w, h = leaf_size(node)
       end
       node.dom = node.dom.merge(w: w, h: h)
+      @size_cache[node.object_id] = [w, h] if @size_cache
       [w, h]
     end
 

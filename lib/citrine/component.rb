@@ -56,11 +56,7 @@ module Citrine
 
       # 只读输入，来自父组件；未声明的 prop 视为错误
       def prop(name, type: nil, default: nil)
-        if DSL_METHODS.include?(name)
-          raise ArgumentError,
-                "prop :#{name} 与元素 DSL 方法同名：读它会把 #{name} { … } 覆盖掉。" \
-                "请改名，或显式读 props[:#{name}]"
-        end
+        ensure_no_dsl_conflict(:prop, name, hint: "请改名，或显式读 props[:#{name}]")
 
         prop_defs[name] = { type: type, default: default }
         define_method(name) { read_prop(name) }
@@ -68,6 +64,8 @@ module Citrine
 
       # 可变状态：读写受追踪，写入触发订阅该状态的 block 重跑
       def state(name, default: nil, &init)
+        ensure_no_dsl_conflict(:state, name, hint: "请改名，或显式经 signal(:#{name}) 读写")
+
         state_defs[name] = [default, init]
         define_method(name) { signal(name).get }
         define_method("#{name}=") { |value| signal(name).set(value) }
@@ -75,6 +73,8 @@ module Citrine
 
       # 派生值：依赖自动收集，上游变化自动失效重算
       def computed(name, &block)
+        ensure_no_dsl_conflict(:computed, name)
+
         compute_defs[name] = block
         define_method(name) { computation(name) }
       end
@@ -202,9 +202,7 @@ module Citrine
       #     ...                             # 后代经 use_context(:theme) 读取
       #   end
       def context(name, default: nil)
-        if DSL_METHODS.include?(name)
-          raise ArgumentError, "context :#{name} 与 DSL 方法同名，请改名"
-        end
+        ensure_no_dsl_conflict(:context, name)
 
         context_defs[name] = default
         define_method("#{name}=") { |value| context_signal(name).set(value) }
@@ -253,6 +251,16 @@ module Citrine
 
       private
 
+      # prop / state / computed / context 宏共用：这些宏都会定义同名读访问器，
+      # 与元素 DSL 方法（label { … } / box { … }）同名会把它静默覆盖掉——
+      # 声明期就报错，而不是渲染期才发现元素丢了。
+      def ensure_no_dsl_conflict(kind, name, hint: "请改名")
+        return unless DSL_METHODS.include?(name)
+
+        raise ArgumentError,
+              "#{kind} :#{name} 与元素 DSL 方法同名：读它会把 #{name} { … } 覆盖掉。#{hint}"
+      end
+
       # on_mount / on_unmount 的参数归一：Symbol / Proc / 块；至少给一个，否则 fail fast
       def collect_hooks(name, handlers, block)
         hooks = block ? handlers + [block] : handlers
@@ -290,9 +298,7 @@ module Citrine
       @props = {}
       defs.each do |name, definition|
         value = props.key?(name) ? props[name] : definition[:default]
-        if definition[:type] && !value.is_a?(definition[:type])
-          raise TypeError, "prop #{name} 应为 #{definition[:type]}，实际为 #{value.class}"
-        end
+        validate_prop_type!(name, definition, value)
 
         @props[name] = value
       end
@@ -318,6 +324,10 @@ module Citrine
     # 提供者组件（跳过读者自己），绑定到它的 context 信号——之后的重跑（哪怕
     # 发生在 provider 不在渲染的时机）都走缓存绑定，信号变化只重跑读它的块。
     # 祖先链上找不到提供者时显式报错，不静默 nil。
+    #
+    # 已知约束（P3）：绑定随组件实例缓存、永不重解析。keyed 复用/移动把组件挂到
+    # 另一个提供者下时，读到的仍是首次解析到的提供者。需要跟随新提供者时请换
+    # key 重建组件（或在本组件内绕开缓存直接调 resolve_context）。
     def use_context(name)
       (@context_bindings ||= {})[name] ||= resolve_context(name)
       @context_bindings[name].get
@@ -361,9 +371,7 @@ module Citrine
 
       new_props.each do |name, value|
         definition = defs[name]
-        if definition[:type] && !value.is_a?(definition[:type])
-          raise TypeError, "prop #{name} 应为 #{definition[:type]}，实际为 #{value.class}"
-        end
+        validate_prop_type!(name, definition, value)
 
         signal = (prop_signals[name] ||= Signal.new(@props[name]))
         @props[name] = value # props 读法保持明值（introspection / 非响应式读取不建订阅）
@@ -520,18 +528,11 @@ module Citrine
       # 一个事件 = 一个合并窗口（S1-1）：handler 里的多次写入只重渲染一轮，
       # 中间态不进 DOM；分发返回前 flush 完毕（"点完即更新"的观感不变）
       Scheduler.batch do
-        case handler
-        when Symbol
-          # 无参方法保持原语义；带参方法（如 on_key: :on_key_press）拿到事件对象
-          method(handler).arity.zero? ? send(handler) : send(handler, event)
-        when Proc
-          # 事件 Proc 是回调（区别于 REACTIVE_PROPS 的求值 Proc）：保持闭包 self。
-          # 嵌套组件传入的父级回调，其方法接收者由定义处（父）的词法作用域决定，
-          # instance_exec 重绑到 emit 的 owner（子）会让父组件回调里的方法调用全部断裂。
-          handler.arity.zero? ? handler.call : handler.call(event)
-        else
-          raise ArgumentError, "无法处理的事件处理器: #{handler.inspect}"
-        end
+        # 事件 Proc 是回调（区别于 REACTIVE_PROPS 的求值 Proc）：必须保持闭包 self——
+        # 嵌套组件传入的父级回调，其方法接收者由定义处（父）的词法作用域决定，
+        # instance_exec 重绑到 emit 的 owner（子）会让父组件回调里的方法调用全部断裂。
+        # 因此走 dispatch_callable 的 bind: false（保持闭包 self）口径。
+        Citrine.dispatch_callable(handler, self, event)
       end
     end
 
@@ -628,6 +629,16 @@ module Citrine
 
     private
 
+    # prop 类型守卫（initialize 与 update_props 同一口径）：声明 type 的 prop 是
+    # **可空**的——nil 与 type 实例都合法。default 缺省为 nil，因此
+    # `prop :foo, type: String` 不再需要显式 default: nil。
+    def validate_prop_type!(name, definition, value)
+      type = definition[:type]
+      return if type.nil? || value.nil? || value.is_a?(type)
+
+      raise TypeError, "prop #{name} 应为 #{type}，实际为 #{value.class}"
+    end
+
     def computation(name)
       block = self.class.compute_defs.fetch(name) do
         raise ArgumentError, "未声明的 computed: #{name}"
@@ -666,6 +677,10 @@ module Citrine
     end
 
     # 生命周期声明（G-10）：块 或 方法名（Symbol），与事件处理器同一套约定
+    # 注意不走 Citrine.dispatch_callable：钩子是恒无参声明——Symbol 不看 arity、
+    # 一律不带实参调用（dispatch_callable 会给非零 arity 方法注入 nil，改变
+    # 带默认值/必填参方法的现状行为）；Proc 一律重绑 owner 且不带实参
+    # （arity ≥ 1 的钩子在 instance_exec 下照旧 ArgumentError，而不是被喂 nil）。
     def run_hook(hook)
       case hook
       when Symbol then send(hook)

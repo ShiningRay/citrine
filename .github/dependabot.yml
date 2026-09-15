@@ -8,3 +8,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      # 所有 actions 升级合并为一个周 PR，替代每个 action 单独开 PR 的噪音
+      github-actions:
+        patterns:
+          - "*"

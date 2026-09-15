@@ -45,7 +45,7 @@ class BatchRenderer < Citrine::Renderer
 end
 
 class BatchWidget < Citrine::Component
-  state :a, default: 0
+  state :alpha, default: 0
   state :b, default: 0
 
   class << self
@@ -57,14 +57,14 @@ class BatchWidget < Citrine::Component
     box do
       label do
         self.class.block_runs += 1
-        "a=#{a} b=#{b}" # 一个块同时读两个信号：同步广播下会被连打两次
+        "a=#{alpha} b=#{b}" # 一个块同时读两个信号：同步广播下会被连打两次
       end
       button(on_click: :bump)
     end
   end
 
   def bump
-    self.a = a + 1
+    self.alpha = alpha + 1
     self.b = b + 1
   end
 end
@@ -101,7 +101,7 @@ class BatchingTest < Minitest::Test
     root = mount(w)
 
     Citrine.batch do
-      w.a = 1
+      w.alpha = 1
       w.b = 2
       assert_includes texts(root), "a=0 b=0", "flush 之前目标节点仍是旧值（中间态不入 DOM）"
     end
@@ -128,8 +128,8 @@ class BatchingTest < Minitest::Test
     runs_after_mount = BatchWidget.block_runs
 
     Citrine.batch do
-      w.a = 1
-      w.a = 2
+      w.alpha = 1
+      w.alpha = 2
       w.b = 9
     end
 
@@ -143,7 +143,7 @@ class BatchingTest < Minitest::Test
     runs_after_mount = BatchWidget.block_runs
 
     Citrine.batch do
-      w.a = 1
+      w.alpha = 1
       Citrine.batch { w.b = 2 } # 内层不 flush
       assert_includes texts(root), "a=0 b=0"
     end

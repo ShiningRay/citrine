@@ -89,6 +89,70 @@ class SignalTest < Minitest::Test
     assert_equal [10, 20], log
   end
 
+  # C4 回归：batch flush 时一个 effect 抛错，同批其余 effect 不得被丢弃；
+  # 队列排空后重新抛出第一个错误（warn 记录全部），队列状态清理干净。
+  def test_flush_rescues_each_effect_and_reraises_first_error
+    a = Citrine::Signal.new(0)
+    b = Citrine::Signal.new(0)
+    log = []
+    Citrine::Effect.create { a.get; log << :first }
+    boom = RuntimeError.new("第一个错误")
+    Citrine::Effect.create { raise boom if a.get >= 1 } # 重跑时才抛
+    Citrine::Effect.create { log << b.get }
+
+    error = nil
+    _out, err = capture_io do
+      error = assert_raises(RuntimeError) do
+        Citrine.batch do
+          a.set(1)
+          b.set(5)
+        end
+      end
+    end
+
+    assert_same boom, error, "队列排空后重新抛出第一个 effect 错误"
+    assert_match(/第一个错误/, err, "失败的 effect 有 warn 记录")
+    assert_equal [:first, 0, :first, 5], log, "抛错的 effect 之后的队列项照常执行"
+    assert_equal 5, b.peek, "块内写入在抛出前已生效"
+
+    b.set(6)
+    assert_equal [:first, 0, :first, 5, 6], log, "队列状态已清理，后续写入照常触发"
+  end
+
+  # C4 回归：用户块自己抛异常时，ensure 里 flush 的调度错误不得替换原始异常。
+  def test_batch_flush_error_does_not_replace_block_error
+    a = Citrine::Signal.new(0)
+    Citrine::Effect.create { raise "effect 错误" if a.get >= 1 } # 重跑时才抛
+
+    user_error = RuntimeError.new("用户原始错误")
+    raised = assert_raises(RuntimeError) do
+      Citrine.batch do
+        a.set(1)
+        raise user_error
+      end
+    end
+
+    assert_same user_error, raised, "ensure 路径抛出的应是用户块的原始异常"
+  end
+
+  # C5 回归：effect 的块在运行中 dispose 自己后继续读信号（depend），
+  # 不得在已清空的 @deps（nil）上崩溃；且自 dispose 后不再重跑。
+  def test_depend_after_self_dispose_mid_run_is_safe
+    s = Citrine::Signal.new(0)
+    log = []
+    Citrine::Effect.create do
+      s.get
+      Citrine::Effect.current.dispose # 运行中自 dispose：@deps 已置 nil
+      s.get                           # 继续读 → depend 遇到 nil 依赖表
+      log << :ran
+    end
+
+    assert_equal [:ran], log
+
+    s.set(1)
+    assert_equal [:ran], log, "自 dispose 后订阅已解除，不再重跑"
+  end
+
   def test_disposed_effect_in_broadcast_snapshot_is_safe
     # F1 回归（citrine-market-terminal 摩擦记录）：
     # 祖先 Effect 重跑时销毁后代 Effect，后代仍在信号的通知快照里被迭代。

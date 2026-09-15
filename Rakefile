@@ -8,6 +8,7 @@ Rake::TestTask.new do |t|
   t.libs << "test"
   t.test_files = FileList["test/*_test.rb"]
   t.warning = false
+  t.ruby_opts << "-rtest_helper" # D4：simplecov 覆盖率须先于框架代码加载
 end
 
 desc "编译示例并运行 Node 桩验收"
@@ -40,7 +41,9 @@ task :size do
     if system("npx --no-install esbuild --version > /dev/null 2>&1")
       sh "npx --no-install esbuild counter.js --minify --target=es2015 --allow-overwrite --outfile=counter.min.js"
     else
-      warn "  (esbuild 不可用，跳过压缩，仅校验未压缩体积)"
+      notice = "esbuild 不可用：体积守卫降级为仅校验未压缩产物（仓库根 npm ci 安装 dev 依赖后恢复完整守卫）"
+      warn "  (#{notice})"
+      puts "::notice::#{notice}" if ENV["CI"] # GitHub Actions 注记：降级必须可见，不能静默溜过发布门禁（T1）
     end
     checked = File.exist?("counter.min.js") ? "counter.min.js" : "counter.js"
     gz = `gzip -c #{checked} | wc -c`.to_i
@@ -76,11 +79,10 @@ task :browser do
   chrome = ENV["CHROME_BIN"] || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
   raise "找不到 Chrome（可用 CHROME_BIN 指定路径）" unless File.exist?(chrome)
 
-  Dir.chdir("examples") do
-    sh "opal -c --no-source-map -I../lib -I. -o browser_check.js browser_check.rb"
-  end
+  # D4：守卫装置已迁至 test/browser/（examples/ 只留可运行 demo）
+  sh "opal -c --no-source-map -Ilib -Itest/browser -o test/browser/browser_check.js test/browser/browser_check.rb"
 
-  page = File.expand_path("examples/browser_check.html")
+  page = File.expand_path("test/browser/browser_check.html")
   dom = `"#{chrome}" --headless=new --disable-gpu --no-first-run --virtual-time-budget=3000 --dump-dom "file://#{page}"`
   match = dom.match(%r{<pre id="browser-report">([^<]+)</pre>})
   raise "浏览器没有产出布局报告（页面加载失败？）" unless match
@@ -111,11 +113,10 @@ task :canvas_parity do
   chrome = ENV["CHROME_BIN"] || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
   raise "找不到 Chrome（可用 CHROME_BIN 指定路径）" unless File.exist?(chrome)
 
-  Dir.chdir("examples") do
-    sh "opal -c --no-source-map -I../lib -I. -o canvas_dom_parity.js canvas_dom_parity.rb"
-  end
+  # D4：等价断言页已迁至 test/browser/；共享组件在 examples/（-Iexamples 解析 require "components"）
+  sh "opal -c --no-source-map -Ilib -Iexamples -Itest/browser -o test/browser/canvas_dom_parity.js test/browser/canvas_dom_parity.rb"
 
-  page = File.expand_path("examples/canvas_dom_parity.html")
+  page = File.expand_path("test/browser/canvas_dom_parity.html")
   dom = `"#{chrome}" --headless=new --disable-gpu --no-first-run --virtual-time-budget=3000 --dump-dom "file://#{page}"`
   match = dom.match(%r{<pre id="parity-report">([^<]+)</pre>})
   raise "等价页没有产出报告（页面加载失败？）" unless match

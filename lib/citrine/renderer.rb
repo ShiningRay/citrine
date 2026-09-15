@@ -5,6 +5,27 @@ require_relative "node"
 require_relative "style"
 
 module Citrine
+  # 可调用体（Symbol / Proc）分发的统一入口：Symbol 在 receiver 上按 arity
+  # 决定是否接收实参；Proc 默认保持闭包 self（事件回调的语义——嵌套组件的
+  # 父级回调不能被重绑），bind: true 时重绑到 receiver（生命周期钩子 /
+  # error_fallback 需要在 owner 上下文里调 DSL）。
+  # 事件处理器（Component#handle_event）与错误兜底（Renderer#render_error_fallback）
+  # 同此一份 arity 约定，不再各处手写分支。
+  def self.dispatch_callable(handler, receiver, arg = nil, bind: false)
+    case handler
+    when Symbol
+      receiver.method(handler).arity.zero? ? receiver.send(handler) : receiver.send(handler, arg)
+    when Proc
+      if handler.arity.zero?
+        bind ? receiver.instance_exec(&handler) : handler.call
+      else
+        bind ? receiver.instance_exec(arg, &handler) : handler.call(arg)
+      end
+    else
+      raise ArgumentError, "无法分发的处理器: #{handler.inspect}"
+    end
+  end
+
   # 渲染器基类：节点树管理 + Effect 装配 + 块级重建/销毁（平台无关）。
   #
   # 平台子类实现钩子：setup_root / create_dom / attach / detach /
@@ -251,7 +272,7 @@ module Citrine
     # 多个 → 包进透明 fragment（复用/销毁单位仍是组件实例）。
     def first_component_render(child, parent, klass, key, child_props)
       before = parent.children.size
-      child.instance_exec { view }
+      run_view_with_fallback(child, parent)
       added = parent.children[before..] || []
       if added.empty?
         raise "Citrine.render：子组件的 view 必须渲染**至少一个**根节点，实际 0 个；" \
@@ -283,7 +304,7 @@ module Citrine
       pool = ReusePool.new([node])
       @parents.push(parent)
       @reuse_pools.push(pool)
-      child.instance_exec { view }
+      run_view_with_fallback(child, parent)
       if parent.children.size != size_before + 1
         raise "Citrine.render：子组件的 view 必须渲染**恰好一个**根节点，" \
               "实际 #{parent.children.size - size_before} 个；多根或纯文本请自行包一层 stack { }"
@@ -315,7 +336,7 @@ module Citrine
       frag.children.clear
       @parents.push(frag)
       @reuse_pools.push(pool)
-      child.instance_exec { view }
+      run_view_with_fallback(child, frag)
     ensure
       @parents.pop
       @reuse_pools&.pop
@@ -392,6 +413,20 @@ module Citrine
       node
     end
 
+    # Context 解析（S1-3）：沿当前渲染遍历栈向上找提供 name 的**最近**祖先组件
+    # （跳过读者自己——组件读自己的 context 时应取到祖先的）。
+    # 只在渲染遍历内可用；消费端首次绑定发生在挂载路径上，之后走缓存绑定。
+    # 供 Component#use_context 跨对象调用，保持 public。
+    def find_context_provider(name, consumer)
+      @parents.reverse_each do |node|
+        owner = node.owner
+        next if owner.nil? || owner.equal?(consumer)
+
+        return owner if owner.provides_context?(name)
+      end
+      nil
+    end
+
     private
 
     def run_view(root, component)
@@ -430,6 +465,10 @@ module Citrine
       if !result.nil? && node.children.empty?
         warn_nonstring(node, result) unless result.is_a?(String)
         set_text(node, result)
+      elsif node.text && !node.text.to_s.empty?
+        # C3：上一轮写过文本、本轮没有（内容切成子节点或 nil）——显式清空，
+        # 否则旧 textContent 与新内容叠加（label { cond ? "text" : nil } 的残留）
+        set_text(node, "")
       end
       result
     ensure
@@ -444,14 +483,35 @@ module Citrine
       owner && owner.class.error_fallback_def ? owner : nil
     end
 
-    # 异常对象交给兜底分支（Symbol 走 arity 约定，与事件处理器同口径）
-    def render_error_fallback(owner, fallback, error)
-      case fallback
-      when Symbol
-        owner.method(fallback).arity.zero? ? owner.send(fallback) : owner.send(fallback, error)
-      when Proc
-        fallback.arity.zero? ? owner.instance_exec(&fallback) : owner.instance_exec(error, &fallback)
+    # C1：子组件 view 的统一执行入口（首次挂载与信号驱动重跑同口径）。
+    # 与 run_block 的错误边界同思路，但兜底归**子组件自己**声明的 error_fallback——
+    # 重跑路径上不存在外层块，异常原来直接穿出 Effect → Scheduler → 事件处理器，
+    # 子组件自己的 fallback 永远接不住。未声明兜底的组件照常上抛
+    # （由外层块的边界或调用方处理，与挂载路径一致）。
+    def run_view_with_fallback(child, parent)
+      before = parent.children.size
+      child.instance_exec { view }
+    rescue StandardError => e
+      raise unless (fallback = child.class.error_fallback_def)
+
+      # 失败那一轮不留半更新：本轮已产出（未收编）的节点全部拆掉，
+      # 然后以异常对象渲染兜底内容（其输出占据组件根的位置）
+      added = parent.children[before..] || []
+      added.each { |n| dispose(n) }
+      parent.children.pop(added.size)
+      render_error_fallback(child, fallback, e)
+      fallback_added = parent.children.size - before
+      if fallback_added != 1
+        raise "Citrine.render：error_fallback 的输出必须是**恰好一个**根节点，" \
+              "实际 #{fallback_added} 个；多根请自行包一层 stack { }"
       end
+      nil
+    end
+
+    # 异常对象交给兜底分支（经 Citrine.dispatch_callable，与事件处理器同口径；
+    # Proc 需要 owner 上下文里的 DSL，故 bind: true 重绑 self）
+    def render_error_fallback(owner, fallback, error)
+      Citrine.dispatch_callable(fallback, owner, error, bind: true)
     end
 
     # keyed 复用的匹配池：一次块执行内，按 key + 身份标签取用旧节点。
@@ -562,7 +622,9 @@ module Citrine
       style = (prop_value(node, node.props[:style]) || {}).dup
       if node.type == :box
         style[:display] ||= "flex"
-        if (direction = prop_value(node, node.props[:direction]))
+        # A7：显式 display 不是 flex（如 grid）时 direction 与它无关——flex_direction
+        # 写给 grid 容器是无效声明，还会让阅读者误以为方向控制生效了
+        if style[:display].to_s == "flex" && (direction = prop_value(node, node.props[:direction]))
           style[:flex_direction] = direction == :column ? "column" : "row"
         end
         gap = prop_value(node, node.props[:gap])
@@ -612,23 +674,33 @@ module Citrine
       stale
     end
 
-    # 值类 prop / 透传属性收到 Proc 时提醒一次：它们不会被求值、也不会订阅
-    # （on_* 的 Proc 是回调，不在此列）
+    # 值类 prop / 透传属性收到 Proc 或 Signal 时提醒一次：它们不会被求值、
+    # 也不会订阅（on_* 的 Proc 是回调，不在此列；value:/checked: 传 Signal 是
+    # 受控值语义，也不在 warn 之列）。Signal 落进透传属性会被 to_s 成
+    # "#<Citrine::Signal…>" 输出——静默坏页面，必须提醒。
     def warn_unreactive_proc(node)
       bad = node.props.select do |key, value|
-        value.is_a?(Proc) && !REACTIVE_PROPS.include?(key) &&
-          (WIDGET_VALUE_PROPS.key?(key) || passthrough_prop?(key, node))
+        (value.is_a?(Proc) && !REACTIVE_PROPS.include?(key) &&
+          (WIDGET_VALUE_PROPS.key?(key) || passthrough_prop?(key, node))) ||
+          (value.is_a?(Signal) && passthrough_prop?(key, node))
       end
       return if bad.empty? || !respond_to?(:warn, true)
 
-      @warned_value_procs ||= {}
-      bad.each_key do |key|
-        next if @warned_value_procs[key]
+      @warned_bad_props ||= {}
+      bad.each do |key, value|
+        next if @warned_bad_props[key]
 
-        @warned_value_procs[key] = true
-        hint = key == :value ? "受控输入请传 Signal：value: signal(:draft)" : "请直接传值或 Signal"
-        warn "[citrine] #{node.type} 的 prop :#{key} 收到 Proc，但它不是响应式属性：" \
-             "Proc 不会被求值。支持 Proc 的只有 #{REACTIVE_PROPS.map { |k| ":#{k}" }.join(' / ')}；#{hint}"
+        @warned_bad_props[key] = true
+        message = if value.is_a?(Signal)
+                    "[citrine] #{node.type} 的 prop :#{key} 收到 Signal，但它是透传属性：" \
+                    "Signal 不会被解包，会渲染成 #<Citrine::Signal…>。请传 .get 后的值；" \
+                    "要双向绑定请用受控值属性（value: / checked:）"
+                  else
+                    hint = key == :value ? "受控输入请传 Signal：value: signal(:draft)" : "请直接传值或 Signal"
+                    "[citrine] #{node.type} 的 prop :#{key} 收到 Proc，但它不是响应式属性：" \
+                    "Proc 不会被求值。支持 Proc 的只有 #{REACTIVE_PROPS.map { |k| ":#{k}" }.join(' / ')}；#{hint}"
+                  end
+        warn message
       end
     end
 
@@ -697,24 +769,6 @@ module Citrine
     def resolve_portal_host(_target)
       raise NotImplementedError, "#{self.class} 不支持 portal"
     end
-
-    private
-
-    # Context 解析（S1-3）：沿当前渲染遍历栈向上找提供 name 的**最近**祖先组件
-    # （跳过读者自己——组件读自己的 context 时应取到祖先的）。
-    # 只在渲染遍历内可用；消费端首次绑定发生在挂载路径上，之后走缓存绑定。
-    # 供 Component#use_context 跨对象调用，保持 public。
-    def find_context_provider(name, consumer)
-      @parents.reverse_each do |node|
-        owner = node.owner
-        next if owner.nil? || owner.equal?(consumer)
-
-        return owner if owner.provides_context?(name)
-      end
-      nil
-    end
-
-    public :find_context_provider
 
     # ── 平台钩子 ───────────────────────────────────────────
 

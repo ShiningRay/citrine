@@ -52,19 +52,24 @@ module Citrine
       resolve_theme_ref(Theme.resolve!(value), depth + 1)
     end
 
-    # fontSize / font_size / :fontSize → :font_size
+    # fontSize / font_size / :fontSize → :font_size；kebab-case（"font-size"）同归一。
+    # P2：per-key memo——normalize 对每个键每次渲染都跑转换，缓存后同键零分配。
     def underscore(key)
-      key.to_s.gsub(/([A-Z])/) { "_#{Regexp.last_match(1).downcase}" }.downcase.to_sym
+      @underscore_cache ||= {}
+      @underscore_cache[key] ||= key.to_s.gsub(/([A-Z])/) { "_#{Regexp.last_match(1).downcase}" }
+                              .gsub("-", "_").downcase.to_sym
     end
 
     # font_size → fontSize（DOM style 属性赋值用）
     def camel(key)
-      key.to_s.gsub(/_([a-zA-Z0-9])/) { Regexp.last_match(1).upcase }
+      @camel_cache ||= {}
+      @camel_cache[key] ||= key.to_s.gsub(/_([a-zA-Z0-9])/) { Regexp.last_match(1).upcase }
     end
 
     # font_size → font-size（内联 CSS 字符串用）
     def kebab(key)
-      key.to_s.tr("_", "-")
+      @kebab_cache ||= {}
+      @kebab_cache[key] ||= key.to_s.tr("_", "-")
     end
 
     def normalize_value(value)

@@ -1,0 +1,8 @@
+{
+  "name": "citrine",
+  "private": true,
+  "description": "Citrine 构建工具链（私有包——框架本身只通过 RubyGems 分发；esbuild 仅供 rake size 体积守卫使用）",
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

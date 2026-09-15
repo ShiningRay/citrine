@@ -13,7 +13,7 @@
 require "native"
 require "citrine/browser"
 require "citrine/canvas"
-require_relative "components"
+require "components" # 共享组件在 examples/，编译时经 -Iexamples 解析（D4 迁至 test/browser/ 后不再是同目录）
 
 doc = Native(`window.document`)
 raw_document = `window.document` # backtick 内需要裸对象（Native 包装会泄漏）；全局 document 保持原样
