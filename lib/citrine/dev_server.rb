@@ -21,6 +21,7 @@ require "listen"
 require "json"
 require "open3"
 require "tmpdir"
+require "tempfile"
 
 require "citrine/theme" # 样式资产注册表（Citrine.css / css_text）
 
@@ -59,6 +60,10 @@ module Citrine
       })();
     JS
 
+    # SSE ping 清扫周期（秒）：僵尸连接（浏览器已关、但无消息可写）平时不会暴露，
+    # 定期 ping 让写动作发生，写失败即被清扫（T6）
+    SSE_PING_INTERVAL = 15
+
     # 命令行解析（纯函数，便于单测）：返回 [目录, 端口, 额外加载路径]
     def self.parse_args(args)
       dir = nil
@@ -68,7 +73,10 @@ module Citrine
       while i < args.length
         arg = args[i]
         if arg == "-p"
-          port = args[i + 1].to_i
+          value = args[i + 1]
+          raise ArgumentError, "-p 需要一个端口参数（如 -p 4402）" if value.nil? || value.start_with?("-")
+
+          port = value.to_i
           i += 2
         elsif arg == "-I"
           value = args[i + 1]
@@ -83,6 +91,7 @@ module Citrine
           dir = arg
           i += 1
         else
+          warn "未知参数 #{arg}，已忽略（用法：citrine dev [目录] [-p 端口] [-I 加载路径]）"
           i += 1
         end
       end
@@ -110,6 +119,7 @@ module Citrine
       raise "目录不存在: #{@dir}" unless File.directory?(@dir)
 
       watch
+      start_ping_sweep
       puma = Puma::Server.new(rack_app)
       puma.add_tcp_listener "127.0.0.1", @port
       puts "Citrine dev server → http://localhost:#{@port}/"
@@ -156,7 +166,9 @@ module Citrine
 
     def route_file(path)
       full = File.expand_path(File.join(@dir, path.delete_prefix("/")))
-      unless full.start_with?(@dir) && File.file?(full)
+      # A4：目录逃逸守卫——裸前缀匹配挡不住 ../（@dir 为 /x/app 时 /x/app-evil 也命中），
+      # 必须"等于目录本身，或以 目录+分隔符 开头"；先确认是文件再比路径
+      unless File.file?(full) && (full == @dir || full.start_with?(@dir + File::SEPARATOR))
         return respond(404, "text/plain; charset=utf-8", "not found: #{path}")
       end
 
@@ -178,16 +190,17 @@ module Citrine
       cached = @cache[path]
       return respond(200, "application/javascript", cached) if cached
 
-      tmp = File.join(Dir.tmpdir, "rv_dev_#{Process.pid}_#{rand(1_000_000)}.js")
+      # T6：临时产物用 Tempfile（进程退出兜底清理），不再 rand 拼名裸写 tmpdir
+      tmp = Tempfile.new(["rv_dev_#{Process.pid}", ".js"])
       # 与手工编译完全一致的形态：cwd = 源文件所在目录，-I附着式传参
       includes = ["-I#{File.join(@root, 'lib')}", "-I."] + @extra_libs.map { |p| "-I#{p}" }
       out, err, status = Open3.capture3(
-        "opal", "-c", *includes,
-        "-o", tmp, File.basename(rb_full),
+        opal_executable, "-c", *includes,
+        "-o", tmp.path, File.basename(rb_full),
         chdir: File.dirname(rb_full)
       )
       if status.success?
-        body = File.binread(tmp)
+        body = File.binread(tmp.path)
         @mutex.synchronize { @cache[path] = body }
         respond(200, "application/javascript", body)
       else
@@ -195,8 +208,19 @@ module Citrine
         respond(200, "application/javascript",
                 "window.__rvShowError(#{message});")
       end
+    rescue Errno::ENOENT
+      abort "找不到 opal 可执行文件：请先 bundle install，并用 bundle exec bin/citrine dev 启动"
     ensure
-      File.unlink(tmp) if tmp && File.exist?(tmp)
+      tmp&.close!
+    end
+
+    # A5：经 rubygems 解析 opal 的 binstub（bundler 环境下稳定指向 bundle 内的 opal，
+    # 不依赖 PATH 里有没有裸 "opal"）；解析不到退化为 PATH 查找——真缺失时由
+    # 上方 Errno::ENOENT 分支给出可操作的 abort 提示
+    def opal_executable
+      Gem.bin_path("opal", "opal")
+    rescue Gem::LoadError
+      "opal"
     end
 
     def index
@@ -248,15 +272,30 @@ module Citrine
                "Connection: keep-alive\r\n\r\n"
       queue = Queue.new
       @mutex.synchronize { @clients << queue }
+      Thread.new { pump_client(io, queue) }
+      [-1, {}, []] # 已劫持连接，Rack 不再处理响应
+    end
+
+    # 每连接一个泵线程：从队列取消息写给浏览器；写失败（连接已死）即注销。
+    # ping 帧（:ping）只作心跳不占消息位——僵尸连接靠它暴露写失败并被清扫。
+    def pump_client(io, queue)
+      loop do
+        message = queue.pop
+        io.write(message == :ping ? ": ping\n\n" : "data: #{message}\n\n")
+      end
+    rescue StandardError
+      @mutex.synchronize { @clients.delete(queue) } # 连接断开时清理
+    end
+
+    # T6：定期给所有 SSE 连接发 ping——平时无消息可写时，浏览器已关的僵尸连接
+    # 不会触发写失败，注册表只增不减；ping 让写动作周期性发生，死连接随之被清扫
+    def start_ping_sweep
       Thread.new do
         loop do
-          message = queue.pop
-          io.write "data: #{message}\n\n"
+          sleep SSE_PING_INTERVAL
+          @mutex.synchronize { @clients.dup }.each { |queue| queue << :ping }
         end
-      rescue StandardError
-        @mutex.synchronize { @clients.delete(queue) } # 连接断开时清理
       end
-      [-1, {}, []] # 已劫持连接，Rack 不再处理响应
     end
 
     def respond(status, type, body)

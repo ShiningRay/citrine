@@ -9,19 +9,24 @@
 ## 安装
 
 ```bash
-# 从源码（本仓库）
+# 从源码安装（当前唯一途径——gem 尚未发布到 rubygems.org，见下）
+git clone https://github.com/ShiningRay/citrine.git
+cd citrine
 bundle install
 bin/citrine dev examples
 
-# 从 gem（发布到 rubygems.org 后）
+# 从 gem（待上架后可用）
 gem install citrine
 citrine dev <你的应用目录>
 ```
 
 说明：Citrine 只通过 RubyGems 分发（源语言是 Ruby，npm 不在分发路径上；
-运行时拆分方案见 GOALS 决策 #7 的例外条件）。
+运行时拆分方案见 GOALS 决策 #7 的例外条件）。发布链路已配置（GitHub
+Actions Trusted Publishing，`v*` 标签触发构建发布，无需 API key），`v0.1.0`
+标签已存在——但 **rubygems.org 的上架状态尚未验证**，`gem install citrine`
+暂不可用，请从源码安装（T7）。
 
-## 当前状态：M0 / M1 / M2 / M3 / M4a 完成（2026-09-14）
+## 当前状态：M0–M4a 完成（2026-09-14）+ React 差距批次（2026-09-15）
 
 | 里程碑 | 内容 | 结果 |
 |---|---|---|
@@ -30,6 +35,11 @@ citrine dev <你的应用目录>
 | M2 | `bin/citrine dev` 开发服务器：热刷新 + 错误浮层 | ✅ 浏览器实测闭环 |
 | M3 | Renderer 基类 + 四个渲染器（DOM / String / Memory / Canvas） | ✅ 可移植性实证 |
 | M4a | `bin/citrine package` 桌面化（macOS .app，零依赖壳） | ✅ 立项原点达成 |
+| S 批次（09-15） | 补齐 React 差距：props 信号化（S1-2）、插槽 children 与组件 ref（S1-4/S1-9）、context（S1-3）、portal（S1-5）、错误边界（S1-6）、suspense（S1-10）、集合深响应（S1-11）、批量更新 `Citrine.batch`（S1-1）、`effect` 宏（S1-8）、watch、元素词表（S2-1）、属性透传与受控 check_box（S2-2/S2-4）、统一事件对象与焦点原语（S2-3/S2-6）、样式单位与主题 token（S2-5） | ✅ 全绿 |
+| T 批次（09-15） | 工具链：体积守卫 `rake size`、框架专属 lint、headless Chrome 布局守卫、Trusted Publishing 发布；dev server 迁移 Rack/Puma/Listen（T-B1）；Canvas 隐藏 DOM 测量 + 真实输入覆盖层（T-B2）；DevTools 依赖图数据层 + source map 还原（T-B3） | ✅ 接入 CI |
+
+09-15 批次的功能计划与执行状态见 [docs/PLAN-react-gap.md](docs/PLAN-react-gap.md)，
+质量与工程化修订见 [docs/PLAN-code-review.md](docs/PLAN-code-review.md)。
 
 **日常开发流程**（M2 起）：
 
@@ -60,8 +70,9 @@ build/CitrineCounter.app/Contents/MacOS/CitrineCounter --dev http://localhost:44
 （`counter.html` / `todo.html`）、CRuby SSR（`ssr_demo.rb`）、浏览器 Canvas
 （`canvas_counter.html` / `canvas_todo.html`）。
 
-v1 已知限制：组件 props 为创建时快照；SSR 为一次性渲染且不序列化事件；
-Canvas 输入用 window.prompt（演示级）、布局为线性 stack/flow。
+v1 已知限制：SSR 为一次性渲染且不序列化事件；Canvas 布局为线性 stack/flow。
+组件 props 已信号化（S1-2，2026-09-15）：父组件重传只重跑真正读取该 prop
+的块，子组件实例与 state 原地保留。
 列表已有 keyed 复用（`key:` 命中即复用节点与实例）；集合用 `Citrine.signal_list([...])`
 （集合自身的每次变更都是一次通知，`get` 返回冻结快照）。
 
@@ -86,47 +97,22 @@ class Counter < Citrine::Component
 end
 ```
 
-v1 已知限制：组件 props 为创建时快照（S2 会信号化）。列表 keyed 复用与
-`Citrine.signal_list` 集合 API 均已落地。
-
 ## 目录
 
 ```
 ├── GOALS.md              # 愿景 / 决策 / 路线图 / 参考资料（项目主文档）
+├── docs/                 # 计划文档：PLAN-react-gap（React 差距）/ PLAN-code-review（质量与工程化）
 ├── lib/
 │   ├── citrine.rb        # 入口：装配 + Citrine.mount / Citrine.unmount / Citrine.render
-│   ├── citrine/signal.rb # Signal / Effect（平台无关，CRuby 可测）
-│   ├── citrine/reactive.rb # 给普通类的小混入：include 后可用 signal(...)
-│   ├── citrine/num.rb    # 跨平台数值工具（idiv / round_to / integral? / finite? …）
-│   ├── citrine/key_event.rb # 键盘事件（平台无关视图；G-9）
-│   ├── citrine/node.rb   # 元素树节点（平台无关）
-│   ├── citrine/component.rb # 组件基类：三宏 + 元素 DSL + 生命周期/键盘声明
-│   ├── citrine/renderer.rb # 渲染器基类：树管理 / Effect 装配 / 块级重建（平台无关）
-│   ├── citrine/dom.rb    # Web DOM 渲染器（Opal 专用）
-│   ├── citrine/canvas.rb # Canvas 2D 渲染器（Opal 专用，自管布局 + 命中检测）
-│   ├── citrine/string_renderer.rb # render-to-string（纯 CRuby）
-│   ├── citrine/dev_server.rb # 开发服务器：热刷新 + 错误浮层（纯 CRuby）
-│   ├── citrine/packager.rb # macOS .app 打包器（纯 CRuby）
-│   └── citrine/browser.rb # 浏览器入口
-├── bin/citrine                # CLI（citrine dev / citrine package）
+│   └── citrine/          # 框架源码：signal / component / renderer 等（GOALS 第七、十节）
+├── lib/rubocop/          # 框架专属 lint cop（Citrine/NoRawIvarAssignment，T-A4）
+├── bin/citrine           # CLI（citrine dev / citrine package）
 ├── desktop/main.swift    # macOS WKWebView 桌面壳（零依赖，约 55 行）
-├── build/                # 打包产物（.app）
-├── examples/
-│   ├── components.rb     # 共享组件（四个后端复用同一份代码）
-│   ├── counter.rb|html   # M1 示例：state / computed / 事件（DOM）
-│   ├── todo.rb|html      # M1 示例：列表 / 受控输入 / 勾选 / 删除（DOM）
-│   ├── reactive_props.rb|html # 响应式属性 + 全局键盘 + 卸载（G-2 / G-9 / G-10）
-│   ├── num_parity.rb     # 数值工具的跨平台一致性样本（rake parity 用）
-│   ├── canvas_counter.rb|html / canvas_todo.rb|html # M3 Canvas 示例
-│   ├── ssr_demo.rb       # M3 示例：CRuby 下 render-to-string
-│   ├── stub_check.js     # Node DOM 桩验收脚本
-│   └── canvas_stub_check.js # Node Canvas 桩验收脚本
-├── test/
-│   ├── signal_test.rb    # 核心机制单测（CRuby / minitest）
-│   ├── component_test.rb # 生命周期 / 键盘分发 / KeyEvent 单测
-│   ├── num_test.rb       # 数值工具单测
-│   └── render_test.rb    # StringRenderer + MemoryRenderer 单测
-└── spike/                # M0 验证存档（browser + hermes）
+├── examples/             # 可运行 demo（components.rb 四后端共享；*.js 为编译产物）
+├── test/                 # CRuby 单测（27 个文件 232 项）+ fixtures + browser/ 真机守卫装置
+├── website/              # 官网（build.sh 构建到 dist/，GitHub Pages 自动部署）
+├── spike/                # M0 验证存档（browser + hermes）
+└── build/                # 打包产物（.app）
 ```
 
 ## 运行
@@ -258,4 +244,6 @@ ruby -run -e httpd . -p 4401
 - `Native` / `to_n` 需要 `require "native"`（Opal stdlib）；Ruby String 可直接传给 JS 函数
 - 带参数的方法调用接 `{}` block 必须写括号：`computed(:x) { ... }`（否则被解析为 Hash）
 - 裸 Hermes VM 没有 `console`（React Native 中由 RN 注入），输出用 `print`
-- 编译命令：`opal -c -I<lib路径> -o out.js in.rb`；产物 ~2MB（含完整 corelib，待按需裁剪）
+- 编译命令：`opal -c -I<lib路径> -o out.js in.rb`；产物体积由 `rake size` 守门：
+  counter 示例 未压缩 960KB → gzip 176KB → minify 后 gzip 123KB（预算 gzip ≤ 300KB，
+  以 `rake size` 实测为准；含完整 corelib，按需裁剪为 P1 议题）

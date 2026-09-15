@@ -107,4 +107,100 @@ class ListDeepTest < Minitest::Test
     assert_equal 9, list[0][:n], "但读到的确实是改过的活元素"
     effect.dispose
   end
+
+  # ── A3：非 ! 就地改写的变更检测（push / store / << 返回 self 或值，
+  # 命名约定覆盖不到）：转发前后快照对比（dup ==），变了即通知该位置 ──
+
+  def test_proxy_hash_store_notifies_position
+    list = Citrine.signal_list([{ n: 1 }])
+    seen = []
+    effect = Citrine::Effect.create { seen << list[0][:n] }
+    assert_equal [1], seen
+
+    list[0].store(:m, 2) # Hash#store 返回 value 而非 self，旧白名单覆盖不到
+    assert_equal [1, 1], seen, "store 触发该位置通知，读者重跑（读到的 n 仍是 1）"
+    assert_equal({ n: 1, m: 2 }, list.get[0])
+    effect.dispose
+  end
+
+  def test_proxy_array_push_notifies_position
+    list = Citrine.signal_list([[1, 2]])
+    sizes = []
+    effect = Citrine::Effect.create { sizes << list[0].size }
+    assert_equal [2], sizes
+
+    list[0].push(3) # Array#push 返回 self、非 ! 结尾
+    assert_equal [2, 3], sizes
+    assert_equal [1, 2, 3], list.get[0]
+    effect.dispose
+  end
+
+  def test_proxy_string_shovel_notifies_position
+    list = Citrine.signal_list([+"ab"]) # 测试文件 frozen_string_literal：造非冻结串
+    seen = []
+    effect = Citrine::Effect.create { seen << list[0].size }
+    assert_equal [2], seen
+
+    list[0] << "cd" # String#<< 返回 self、非 ! 结尾
+    assert_equal [2, 4], seen
+    assert_equal "abcd", list.get[0]
+    effect.dispose
+  end
+
+  def test_proxy_reads_do_not_false_positive
+    # 快照对比未变不通知：纯读不会触发重跑风暴
+    list = Citrine.signal_list([{ n: 1 }])
+    reads = 0
+    effect = Citrine::Effect.create { list[0][:n]; list[0].key?(:n); reads += 1 }
+    reads_after_mount = reads
+
+    3.times { list[0][:n] }
+
+    assert_equal reads_after_mount, reads, "纯读不通知"
+    effect.dispose
+  end
+
+  def test_proxy_bang_methods_still_notify_by_convention
+    list = Citrine.signal_list([[3, 1]])
+    seen = []
+    effect = Citrine::Effect.create { seen << list[0].first }
+    assert_equal [3], seen
+
+    list[0].sort!
+    assert_equal [3, 1], seen, "sort! 按命名约定通知，读者重跑读到排好序的元素"
+    assert_equal [1, 3], list.get[0]
+    effect.dispose
+  end
+
+  # ── P3：列表缩短后越界位置的元素信号被清理（信号表只增不减）─────────
+
+  def test_oob_element_signals_are_pruned_after_shrink
+    list = Citrine.signal_list([1, 2, 3, 4])
+    4.times { |i| list[i] } # 建出 0..3 的元素信号
+    signals = list.instance_variable_get(:@element_signals)
+    assert_equal [0, 1, 2, 3], signals.keys.sort
+
+    list.replace([9])
+    signals = list.instance_variable_get(:@element_signals)
+    assert_equal [0], signals.keys.sort, "越界位置的信号键被清理"
+    assert_equal 9, list[0]
+
+    list.replace([7, 8, 6, 5, 4])
+    list.replace([7, 8])
+    signals = list.instance_variable_get(:@element_signals)
+    assert_equal [0], signals.keys.sort, "反复增删也不积累越界键（信号表不再只增不减）"
+    assert_equal [7, 8], list.get
+  end
+
+  def test_oob_position_reader_is_notified_after_shrink
+    list = Citrine.signal_list([{ id: "A" }, { id: "B" }])
+    seen = []
+    effect = Citrine::Effect.create { seen << (list[1] == nil) } # 位置 1 的读者
+    assert_equal [false], seen
+
+    list.replace([{ id: "C" }])
+
+    assert_equal [false, true], seen, "越界读者被通知：重跑后经代理读到 nil 元素"
+    effect.dispose
+  end
 end

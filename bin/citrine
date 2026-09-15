@@ -19,7 +19,7 @@ when "package"
   Citrine::Packager.run!(ARGV)
 when nil, "help", "-h", "--help"
   puts <<~USAGE
-    Citrine（工作代号）CLI
+    Citrine CLI
 
     用法:
       bin/citrine dev [目录] [-p 端口]   开发服务器：改 .rb 自动编译并刷新浏览器

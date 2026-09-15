@@ -1,7 +1,8 @@
 # frozen_string_literal: true
 
-# 组件级行为（纯 CRuby）：生命周期（G-10）、键盘分发（G-9）、KeyEvent。
-# 渲染器相关回归在 render_test.rb。
+# 组件级行为（纯 CRuby）：生命周期（G-10）、键盘分发（G-9）、KeyEvent、
+# 宏声明校验（A1：prop/state/computed/context 与元素 DSL 同名即报错）、
+# prop 可空校验（A2）。渲染器相关回归在 render_test.rb。
 require "minitest/autorun"
 require "citrine"
 require "citrine/string_renderer"
@@ -158,6 +159,106 @@ class KeyDispatchTest < Minitest::Test
     w.handle_key(->(ev) { w.log = w.log + ["proc:#{ev.key}"] }, Citrine::KeyEvent.new("Tab"))
 
     assert_equal ["proc:Tab"], w.log
+  end
+end
+
+class MacroNameConflictTest < Minitest::Test
+  # A1：state / computed 宏补上了与 prop 同口径的 DSL 方法名冲突检查——
+  # 这些宏定义的读访问器会静默覆盖同名元素方法（label { … } / a(href:) { … }），
+  # 必须声明期就报错。
+
+  def test_prop_rejects_dsl_method_names
+    error = assert_raises(ArgumentError) do
+      Class.new(Citrine::Component) { prop :label }
+    end
+    assert_match(/prop :label/, error.message)
+    assert_match(/元素 DSL 方法同名/, error.message)
+  end
+
+  def test_state_rejects_dsl_method_names
+    error = assert_raises(ArgumentError) do
+      Class.new(Citrine::Component) { state :label }
+    end
+    assert_match(/state :label/, error.message)
+    assert_match(/元素 DSL 方法同名/, error.message)
+  end
+
+  def test_state_rejects_html_tag_names
+    # :a 是锚点元素 a(href:) { … }——与 label 同属元素 DSL，同口径拦截
+    error = assert_raises(ArgumentError) do
+      Class.new(Citrine::Component) { state :a }
+    end
+    assert_match(/state :a/, error.message)
+  end
+
+  def test_computed_rejects_dsl_method_names
+    error = assert_raises(ArgumentError) do
+      Class.new(Citrine::Component) { computed(:button) { 1 } }
+    end
+    assert_match(/computed :button/, error.message)
+    assert_match(/元素 DSL 方法同名/, error.message)
+  end
+
+  def test_context_rejects_dsl_method_names
+    error = assert_raises(ArgumentError) do
+      Class.new(Citrine::Component) { context :label }
+    end
+    assert_match(/context :label/, error.message)
+    assert_match(/元素 DSL 方法同名/, error.message)
+  end
+
+  def test_plain_names_still_work_for_all_macros
+    widget = Class.new(Citrine::Component) do
+      prop :title, type: String, default: "t"
+      state :count, default: 1
+      computed(:double) { count * 2 }
+      context :theme, default: :light
+
+      def view = label { "x" }
+    end
+
+    instance = widget.new
+    assert_equal "t", instance.title
+    assert_equal 1, instance.count
+    assert_equal 2, instance.double
+    assert_equal :light, instance.theme
+  end
+end
+
+class NullablePropTest < Minitest::Test
+  # A2：声明 type 的 prop 是可空的——nil 与 type 实例都合法。
+  # default 缺省为 nil，`prop :foo, type: String` 不再要求显式 default: nil。
+
+  def widget_class
+    Class.new(Citrine::Component) do
+      prop :subtitle, type: String
+
+      def view = label { "x" }
+    end
+  end
+
+  def test_typed_prop_defaults_to_nil_without_type_error
+    assert_nil widget_class.new.subtitle, "未传时 default nil：可空 prop 不再报 TypeError"
+    assert_nil widget_class.new(subtitle: nil).subtitle
+    assert_equal "hi", widget_class.new(subtitle: "hi").subtitle
+  end
+
+  def test_typed_prop_still_rejects_wrong_type
+    error = assert_raises(TypeError) { widget_class.new(subtitle: 123) }
+    assert_match(/subtitle/, error.message)
+    assert_match(/String/, error.message)
+  end
+
+  def test_update_props_accepts_nil_and_rejects_wrong_type
+    w = widget_class.new(subtitle: "a")
+
+    w.update_props(subtitle: nil)
+    assert_nil w.subtitle, "重传 nil 合法：响应式通道同步为 nil"
+
+    w.update_props(subtitle: "b")
+    assert_equal "b", w.subtitle
+
+    assert_raises(TypeError) { w.update_props(subtitle: 42) }
   end
 end
 

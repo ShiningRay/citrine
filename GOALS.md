@@ -2,6 +2,9 @@
 
 > 记录日期：2026-09-14
 > 状态：立项探索期，尚未写代码
+> 当前状态指针（2026-09-15）：M0–M4a 已全部完成，React 差距批次 1–3 与工具链线
+> T-A/T-B 已落地；功能缺口清单见 docs/PLAN-react-gap.md，质量与工程化修订见
+> docs/PLAN-code-review.md。下文保留立项时的原始记录作为决策档案。
 
 ## 一、愿景
 
@@ -108,6 +111,9 @@ WebSocket 推给 webview 显示。
 **M2 结果（2026-09-14，验收通过）**：
 - 零新依赖：纯 CRuby 标准库（socket / open3 / json / tmpdir），
   `lib/rv/dev_server.rb` + `bin/rv` 约 220 行
+  （2026-09-15 变更：T-B1 起 dev server 重构为 Rack + Puma + Listen，
+  gemspec 已列这三个运行时依赖——立法点是"不自造 socket 服务"，而非
+  永久零依赖）
 - *.js 请求按对应 *.rb 现场编译 + mtime 缓存（首次 ~2s，命中 ~13ms）
 - 浏览器实测三段闭环：改标题 → 自动刷新显示新标题；注入语法错误 →
   浮层显示 `./counter.rb:9:1: error: unexpected token kEND`；修复保存 →
@@ -532,6 +538,8 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 | 2026-09-15 | **错误边界（S1-6）**：`error_fallback :method` / `error_fallback { }` 类宏——块 / 子组件 view 在本组件的块里抛错时，以异常对象为实参渲染兜底内容，替换该块本轮内容；失败那一轮先回滚（块内产出的节点全部拆掉，抛错的子组件从未被收编、不会伪装成卸载），下一轮块正常执行即恢复；未声明兜底的组件异常照常穿出。已知边界：信号驱动的子组件 view Effect 重跑抛错暂不在此捕获（沿调度路径传播），留待错误边界与调度协同的第二版。新增 test/error_boundary_test.rb（3 项） | 此前一次渲染异常 = 页面半更新（旧节点已拆、新节点未建）且无人兜底（GOALS P0 "能用"缺口） |## 十一、后续发展路线（Roadmap v2，2026-09-14 制定）
 
 > 定位：从"完整 demo"走向"能用 → 好用 → 是个开源项目"。
+> 执行级展开见 `docs/PLAN-react-gap.md`（P0 组件语义缺口的批次计划，批次 1–3
+> 已落地）与 `docs/PLAN-code-review.md`（质量与工程化修订，含 P1/P2 工具链项）。
 
 ### P0 — 成为"能用"的框架（核心 API 缺口）
 
@@ -559,7 +567,7 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 
 5. **产物体积**：2.2MB 全量 corelib → 按需裁剪 / tree-shaking / esbuild
    minify，目标 gzipped < 300KB（决策 #6 遗留观察项）。
-6. **`rv build`**：生产构建（minify + 哈希文件名 + source map）。
+6. **`citrine build`**：生产构建（minify + 哈希文件名 + source map）。
 7. **Fast Refresh**：保状态热替换（需要组件模块热替换协议）。
 8. **DevTools**：**信号依赖图可视化**——signal 框架独有的调试卖点
    （哪个信号触发了哪次更新、依赖边一目了然）。
@@ -569,6 +577,8 @@ DSL 全域 snake_case：事件 `on_click` / `on_change` / `on_enter`，样式键
 9. **正式命名**（决策 #7 悬而未决，RV 仅为工作代号）+ 仓库/域名。
 10. **分包发布**：citrine-core / citrine-dom / citrine-canvas / citrine-cli（对齐 react /
     react-dom 的分包结构，决策 #7 的 monorepo 方案）。
+    *（已被决策 #7 显式推迟：v1 单 gem 已定案，分包留待 P2 视复杂度再拆——
+    本节保留仅作历史记录。）*
 11. **CI + 测试矩阵**：GitHub Actions 跑 CRuby 单测 + 多桩验收。
 12. **文档**：API 参考 + 教程（当前只有 GOALS/README）；把 MemoryRenderer
     提升为官方组件测试助手。

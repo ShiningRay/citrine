@@ -18,7 +18,12 @@ module Citrine
       unless Citrine.renderer.is_a?(DomRenderer)
         Citrine.renderer = new
       end
-      Citrine.mount(component, Citrine.renderer.document_element(element_id))
+      element = Citrine.renderer.document_element(element_id)
+      if element.nil?
+        raise %(Citrine.mount_at：找不到 id 为 "#{element_id}" 的元素（确认 HTML 里有 <div id="#{element_id}">…</div> 再挂载）)
+      end
+
+      Citrine.mount(component, element)
     end
 
     def document_element(element_id)
@@ -56,7 +61,9 @@ module Citrine
     def apply_props(node)
       el = node.dom
       if node.props.key?(:css_class)
-        el[:className] = prop_value(node, node.props[:css_class]).to_s
+        css_class = prop_value(node, node.props[:css_class])
+        # A7：数组形式（[:card, :active]）空格 join 后与 SSR class 属性同口径
+        el[:className] = css_class.is_a?(Array) ? css_class.join(" ") : css_class.to_s
       end
       el[:placeholder] = prop_value(node, node.props[:placeholder]).to_s if node.props.key?(:placeholder)
 
@@ -86,26 +93,24 @@ module Citrine
       ensure_events(node)
     end
 
-    # S2-3：事件面——prop 名 → DOM 事件名。处理器收到平台无关视图
-    # （键盘是 KeyEvent，其余是 Citrine::Event），原生细节走 #raw。
-    def event_defs
-      @event_defs ||= {
-        on_click: :click, on_focus: :focus, on_blur: :blur,
-        on_key: :keydown, on_key_up: :keyup,
-        on_dblclick: :dblclick, on_contextmenu: :contextmenu,
-        on_mouse_enter: :mouseenter, on_mouse_leave: :mouseleave,
-        on_mouse_down: :mousedown, on_mouse_up: :mouseup,
-        on_wheel: :wheel, on_scroll: :scroll,
-        on_submit: :submit, on_paste: :paste,
-        on_touch_start: :touchstart, on_touch_move: :touchmove, on_touch_end: :touchend,
-        on_pointer_down: :pointerdown, on_pointer_move: :pointermove, on_pointer_up: :pointerup
-      }.freeze
-    end
+    # S2-3：事件面——prop 名 → DOM 事件名（冻结常量，一次定义全实例共享）。
+    # 处理器收到平台无关视图（键盘是 KeyEvent，其余是 Citrine::Event），原生细节走 #raw。
+    EVENT_DEFS = {
+      on_click: :click, on_focus: :focus, on_blur: :blur,
+      on_key: :keydown, on_key_up: :keyup,
+      on_dblclick: :dblclick, on_contextmenu: :contextmenu,
+      on_mouse_enter: :mouseenter, on_mouse_leave: :mouseleave,
+      on_mouse_down: :mousedown, on_mouse_up: :mouseup,
+      on_wheel: :wheel, on_scroll: :scroll,
+      on_submit: :submit, on_paste: :paste,
+      on_touch_start: :touchstart, on_touch_move: :touchmove, on_touch_end: :touchend,
+      on_pointer_down: :pointerdown, on_pointer_move: :pointermove, on_pointer_up: :pointerup
+    }.freeze
 
     def ensure_events(node)
       owner = node.owner
 
-      event_defs.each do |prop, event_name|
+      EVENT_DEFS.each do |prop, event_name|
         ensure_event(node, event_name, prop, event_name.to_s) do |event|
           handler = node.props[prop]
           next unless handler
@@ -223,6 +228,9 @@ module Citrine
       return if node.type == :fragment
 
       node.dom[:textContent] = text.to_s
+      # 镜像进节点的文本槽（与 Canvas/SSR 同口径）：Renderer#run_block 靠它
+      # 判定"上一轮写过文本"，本轮没有内容时显式清空，防旧 textContent 残留
+      node.text = text
     end
 
     def finalize(node)

@@ -100,12 +100,12 @@ class MemoryRenderer < Citrine::Renderer
 end
 
 class TwoStateWidget < Citrine::Component
-  state :a, default: 1
+  state :alpha, default: 1
   state :b, default: 1
 
   def view
     box do
-      label { "a=#{a}" }
+      label { "a=#{alpha}" }
       label { "b=#{b}" }
     end
   end

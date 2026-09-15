@@ -4,6 +4,7 @@
 # 结构：build/<Name>.app/{MacOS/<Name>, Resources/{index.html, <name>.js}, Info.plist}
 require "open3"
 require "fileutils"
+require_relative "version"
 
 module Citrine
   class Packager
@@ -62,7 +63,7 @@ module Citrine
 
     def compile_js(rb, output)
       out, err, status = Open3.capture3(
-        "opal", "-c",
+        opal_executable, "-c",
         "-I#{File.join(@root, 'lib')}", "-I#{@dir}",
         "-o", output, File.basename(rb),
         chdir: @dir
@@ -70,6 +71,8 @@ module Citrine
       return if status.success?
 
       abort "编译失败:\n#{out}\n#{err}"
+    rescue Errno::ENOENT
+      abort "找不到 opal 可执行文件：请先 bundle install，并用 bundle exec bin/citrine package 打包"
     end
 
     def swift_build(output)
@@ -80,6 +83,16 @@ module Citrine
       return if status.success?
 
       abort "Swift 编译失败:\n#{out}\n#{err}"
+    rescue Errno::ENOENT
+      abort "找不到 swiftc：打包 macOS .app 需要 Xcode 命令行工具（xcode-select --install）"
+    end
+
+    # A5：经 rubygems 解析 opal 的 binstub（bundler 环境下稳定指向 bundle 内的 opal）；
+    # 解析不到退化为 PATH 查找——真缺失时由 Errno::ENOENT 分支给出可操作的 abort 提示
+    def opal_executable
+      Gem.bin_path("opal", "opal")
+    rescue Gem::LoadError
+      "opal"
     end
 
     def info_plist
@@ -95,9 +108,9 @@ module Citrine
           <key>CFBundleIdentifier</key>
           <string>dev.rubyreact.#{@app_name.downcase}</string>
           <key>CFBundleVersion</key>
-          <string>0.1.0</string>
+          <string>#{Citrine::VERSION}</string>
           <key>CFBundleShortVersionString</key>
-          <string>0.1.0</string>
+          <string>#{Citrine::VERSION}</string>
           <key>CFBundlePackageType</key>
           <string>APPL</string>
           <key>CFBundleExecutable</key>

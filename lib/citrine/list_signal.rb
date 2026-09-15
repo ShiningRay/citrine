@@ -100,6 +100,22 @@ module Citrine
       (@element_signals ||= {})[index] ||= Signal.new(@value[index])
     end
 
+    # 元素代理就地改写后的开发模式提醒：非值语义 == 的元素无法经快照对比判定
+    # 变更，链式调用（返回 self 的 push / update 之类）改了也检测不到——
+    # 按 [元素类, 方法名] 提醒一次，提示手动通知。提醒存信号上而不是代理上：
+    # 代理是每次 list[i] 新建的。
+    def note_undetectable_element_mutation(index, name, klass)
+      return unless Citrine.respond_to?(:dev_mode?) && Citrine.dev_mode?
+
+      warned = (@undetectable_warns ||= {})
+      key = [klass, name]
+      return if warned[key]
+
+      warned[key] = true
+      warn "[citrine] #{klass}##{name} 的就地改写无法自动检测（该类型不是值语义 ==）：" \
+           "改动后请手动调 element_changed!(#{index})"
+    end
+
     # ── 写：每次都是一份新数组 + 一次通知（值相等则不通知）──────────
 
     def <<(item)
@@ -241,20 +257,39 @@ module Citrine
     # 集合结构变更后，把已存在的元素信号按位置刷新到新数组的元素上
     # （等值检查：位置上的元素没变就不通知，push 不会误伤位置读者）。
     # 迭代快照：订阅者的重跑可能经 [] 新建元素信号，不能边遍历边改表。
+    # 越界键（列表缩短后尾部残留的位置）先通知（值置 nil）再在循环后统一
+    # 删除：信号表只增不减会在反复增删的长列表上积累幽灵信号（P3）。
     def refresh_element_signals
       return unless @element_signals
 
+      stale = []
       @element_signals.values.dup.each do |signal|
         index = @element_signals.key(signal)
-        signal.set(index < @value.size ? @value[index] : nil)
+        if index < @value.size
+          signal.set(@value[index])
+        else
+          signal.set(nil)
+          stale << index
+        end
       end
+      stale.each { |index| @element_signals.delete(index) }
     end
 
     # 元素代理（S1-11）：list[i] 的返回值。读取与行为全部转发给底层元素；
     # 就地改写（proxy[:n] = 1、proxy.sort! …）改的是活元素并强制通知订阅
     # 这个位置的块——其他位置的读者与集合级读者都不重跑。
+    #
+    # 变更检测的口径：! 结尾的方法按命名约定通知；其余方法转发前后做元素快照
+    # 对比（dup ==），push / store / << 这类返回 self 的非 ! 就地改写因此不再
+    # 静默丢更新。快照只对值语义 == 的类型有效（见 VALUE_COMPARABLE）——identity
+    # == 的类型 dup 后必不相等，读操作会被误判为变更，订阅块重跑后再触发读，
+    # 就是无限循环。快照是浅层的：更深层级的就地改写（proxy[:nested][:x] = 1，
+    # 内层是转发返回的裸对象）保持 v1 的静默边界，要更新请替换该元素或
+    # 调 element_changed!。
     class ElementProxy
       NAME_SUFFIX_BANG = /\A\w+!\z/.freeze
+      # 值语义 ==（dup 后与未变的自己相等）的元素类型才做快照对比
+      VALUE_COMPARABLE = [Array, Hash, String, Struct].freeze
 
       def initialize(list, index, element)
         @list = list
@@ -273,10 +308,15 @@ module Citrine
           raise NoMethodError, "元素代理（#{safe_class}）没有 #{name} 方法"
         end
 
+        bang = NAME_SUFFIX_BANG.match?(name)
+        before = @element.dup if !bang && value_comparable?
         result = @element.public_send(name, *args, &block)
-        # 转发的就地改写方法（sort! / compact! …）同样触发该位置的通知；
-        # != 这类操作符不匹配 NAME_SUFFIX_BANG，不会误报
-        @list.element_changed!(@index) if NAME_SUFFIX_BANG.match?(name)
+        if bang || (!before.nil? && before != @element)
+          @list.element_changed!(@index)
+        elsif before.nil? && result.equal?(@element)
+          # 无法判定：非值语义元素的链式调用可能是就地改写
+          @list.note_undetectable_element_mutation(@index, name, safe_class)
+        end
         result
       end
 
@@ -299,6 +339,10 @@ module Citrine
       end
 
       private
+
+      def value_comparable?
+        VALUE_COMPARABLE.any? { |klass| @element.is_a?(klass) }
+      end
 
       def safe_class
         @element.class

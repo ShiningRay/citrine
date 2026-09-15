@@ -14,7 +14,15 @@ module Citrine
           yield
         ensure
           @depth -= 1
-          flush if @depth.zero?
+          if @depth.zero?
+            pending = $! # 用户块抛出的异常（若有）正在传播
+            begin
+              flush
+            rescue StandardError
+              raise if pending.nil? # 无用户异常时调度错误照常抛出
+              # 用户原始异常优先：flush 的错误不替换它（warn 已由 flush 发出）
+            end
+          end
         end
       end
 
@@ -22,25 +30,41 @@ module Citrine
         !@depth.nil? && @depth > 0
       end
 
-      # 去重入队：同一 Effect 被多个信号命中也只跑一次
+      # 去重入队：同一 Effect 被多个信号命中也只跑一次。
+      # 以 effect 对象本身作 Hash 键（identity）：object_id 会被 GC 复用，
+      # 复用期内同 id 的新 effect 会被误判为"已入队"而静默丢弃更新。
       def schedule(effect)
-        return if @queued && @queued.key?(effect.object_id)
+        return if @queued && @queued.key?(effect)
 
         (@queue ||= []) << effect
-        (@queued ||= {})[effect.object_id] = true
+        (@queued ||= {})[effect] = true
       end
 
       # 排空队列。重跑期间产生的新写入（depth 已归零）走同步广播——
       # 与窗口外的既有语义一致，也避免循环依赖时无限排空。
+      # 单个 effect 抛错不中断本轮其余项：逐项 rescue、记档第一个错误，
+      # 队列排空后统一 warn 并重新抛出它——既避免同批更新半途丢弃，
+      # 也不让调度错误从 ensure 路径穿出时替换用户块的原始异常
+      # （batch 的 ensure 依 $! 判定：用户异常在传播时吞掉调度错误，只保留 warn）。
       def flush
+        first_error = nil
         while @queue && !@queue.empty?
           current = @queue
           @queued = nil
           @queue = nil
-          current.each(&:run)
+          current.each do |effect|
+            begin
+              effect.run
+            rescue StandardError => e
+              first_error ||= e
+              warn "[citrine] effect 重跑失败（#{e.class}: #{e.message}），已跳过；" \
+                   "同批其余 effect 不受影响"
+            end
+          end
         end
         @queue = nil
         @queued = nil
+        raise first_error if first_error
       end
     end
   end
@@ -189,6 +213,7 @@ module Citrine
     end
 
     def depend(signal)
+      return if @deps.nil? # 块运行中自 dispose：依赖表已清空，不再登记（原 nil.any? 崩溃点）
       return if @deps.any? { |d| d.equal?(signal) } # 同一信号读多次只记一条依赖边
 
       @deps << signal

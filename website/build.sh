@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 构建 Citrine 官网静态产物 → website/dist/
-# 用法: bin/citrine build-site  （或 bash website/build.sh）
+# 用法: bash website/build.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."   # 仓库根
 
@@ -23,9 +23,21 @@ done
 cp examples/counter.html "$OUT/counter.html"
 cp examples/todo.html "$OUT/todo.html"
 
+echo "[site] 注入版本徽章（T5：来源 lib/citrine/version.rb，构建时替换）…"
+VERSION=$(ruby -Ilib -e 'require "citrine/version"; print Citrine::VERSION')
+TMP_WEBSITE=website/.website_build.rb
+trap 'rm -f "$TMP_WEBSITE"' EXIT
+ruby -e '
+  src = File.read("website/website.rb")
+  abort "website.rb 里找不到版本徽章 state（注入失败）" \
+    unless src.sub!(/state :version, default: "v[0-9.]+"/,
+                    %Q{state :version, default: "v#{ARGV[0]}"})
+  File.write(ARGV[1], src)
+' "$VERSION" "$TMP_WEBSITE"
+
 echo "[site] 编译官网徽章组件…"
-(cd website && (bundle exec opal -c -I../lib -I. -o dist/website.js website.rb) \
-  || (opal -c -I../lib -I. -o dist/website.js website.rb))
+(cd website && (bundle exec opal -c -I../lib -I. -o dist/website.js .website_build.rb) \
+  || (opal -c -I../lib -I. -o dist/website.js .website_build.rb))
 
 echo "[site] 拷贝落地页…"
 cp website/index.html "$OUT/"
