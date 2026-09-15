@@ -28,6 +28,10 @@ when nil, "help", "-h", "--help"
       bin/citrine package <示例名>       打包为桌面应用：macOS 为 .app，Windows 为
                                      Edge --app 零依赖壳（build/ 目录下）
                                      如: bin/citrine package counter
+                                     [目录] 指定示例所在目录（跨仓库示例用）
+                                     -I 追加加载路径（可重复），-n 覆盖 App 名
+                                     如: bin/citrine package desktop ../emerald/examples \
+                                           -I ../beryl/lib -I ../emerald/lib -n Emerald
 
     桌面开发模式:
       bin/citrine dev & 后执行:
