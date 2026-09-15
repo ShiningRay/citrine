@@ -1,6 +1,7 @@
 # Citrine（黄水晶）
 
 [![CI](https://github.com/ShiningRay/citrine/actions/workflows/ci.yml/badge.svg)](https://github.com/ShiningRay/citrine/actions/workflows/ci.yml)
+[![Gem Version](https://badge.fury.io/rb/citrine.svg)](https://rubygems.org/gems/citrine)
 
 用 Ruby 写信号式响应 UI，经 Opal 编译后渲染到 Web、桌面与移动端。
 愿景、架构决策与路线图见 [GOALS.md](GOALS.md)。
@@ -9,22 +10,21 @@
 ## 安装
 
 ```bash
-# 从源码安装（当前唯一途径——gem 尚未发布到 rubygems.org，见下）
+# 从 gem（已发布，推荐）
+gem install citrine
+citrine dev <你的应用目录>
+
+# 从源码
 git clone https://github.com/ShiningRay/citrine.git
 cd citrine
 bundle install
 bin/citrine dev examples
-
-# 从 gem（待上架后可用）
-gem install citrine
-citrine dev <你的应用目录>
 ```
 
 说明：Citrine 只通过 RubyGems 分发（源语言是 Ruby，npm 不在分发路径上；
-运行时拆分方案见 GOALS 决策 #7 的例外条件）。发布链路已配置（GitHub
-Actions Trusted Publishing，`v*` 标签触发构建发布，无需 API key），`v0.1.0`
-标签已存在——但 **rubygems.org 的上架状态尚未验证**，`gem install citrine`
-暂不可用，请从源码安装（T7）。
+运行时拆分方案见 GOALS 决策 #7 的例外条件）。发布链路为 GitHub Actions
+Trusted Publishing（`v*` 标签触发构建发布，无需 API key），0.2.0 起已上架
+[rubygems.org](https://rubygems.org/gems/citrine)。
 
 ## 当前状态：M0–M4a 完成（2026-09-14）+ React 差距批次（2026-09-15）
 
