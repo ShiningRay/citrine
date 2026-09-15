@@ -41,9 +41,7 @@
 
 ## [0.1.1] - 2026-09-14
 
-> 注：该版本未单独发版打标——内容随 v0.2.0 首次发布到 rubygems.org
-> （见 docs/PLAN-code-review.md T7；v0.2.0 的 Trusted Publishing 前置已补齐，gem
-> 发布以 rubygems.org 页面实际状态为准）。
+> 注：该版本未单独发版打标——内容随 v0.2.0 首次发布到 rubygems.org（2026-09-15 已上架）。
 
 摩擦记录（citrine-market-terminal dogfooding 的 FRICTION.md）驱动的修复：
 
