@@ -166,15 +166,18 @@ module Citrine
 
     def route_file(path)
       full = File.expand_path(File.join(@dir, path.delete_prefix("/")))
-      # A4：目录逃逸守卫——裸前缀匹配挡不住 ../（@dir 为 /x/app 时 /x/app-evil 也命中），
-      # 必须"等于目录本身，或以 目录+分隔符 开头"；先确认是文件再比路径
-      unless File.file?(full) && (full == @dir || full.start_with?(@dir + File::SEPARATOR))
-        return respond(404, "text/plain; charset=utf-8", "not found: #{path}")
-      end
 
+      # .js 先于存在性守卫处理：fresh clone 里没有编译产物（*.js 不入库），
+      # 只要对应的 .rb 在目录内就要现场编译，否则会在这里被 404 拦下
       if path.end_with?(".js")
         rb = full.sub(/\.js$/, ".rb")
-        return serve_compiled(path, rb) if File.exist?(rb)
+        return serve_compiled(path, rb) if File.file?(rb) && path_in_dir?(rb)
+      end
+
+      # A4：目录逃逸守卫——裸前缀匹配挡不住 ../（@dir 为 /x/app 时 /x/app-evil 也命中），
+      # 必须"等于目录本身，或以 目录+分隔符 开头"；先确认是文件再比路径
+      unless File.file?(full) && path_in_dir?(full)
+        return respond(404, "text/plain; charset=utf-8", "not found: #{path}")
       end
 
       body = File.binread(full)
@@ -184,6 +187,11 @@ module Citrine
         type = CONTENT_TYPES["html"]
       end
       respond(200, type, body)
+    end
+
+    # A4 的路径包含判断：等于目录本身，或以 目录+分隔符 开头
+    def path_in_dir?(full)
+      full == @dir || full.start_with?(@dir + File::SEPARATOR)
     end
 
     def serve_compiled(path, rb_full)
