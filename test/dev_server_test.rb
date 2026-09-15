@@ -3,6 +3,7 @@
 require "minitest/autorun"
 require "fileutils"
 require "tmpdir"
+require "pathname"
 
 require "citrine/dev_server"
 
@@ -48,7 +49,8 @@ class DevServerArgsTest < Minitest::Test
     libs = server.instance_variable_get(:@extra_libs)
 
     assert_equal 1, libs.length
-    assert libs.first.start_with?("/"), "应转成绝对路径，实际 #{libs.first.inspect}"
+    # Windows 的绝对路径带盘符（C:/...），POSIX 是 /...；Pathname#absolute? 两侧语义一致
+    assert Pathname.new(libs.first).absolute?, "应转成绝对路径，实际 #{libs.first.inspect}"
     assert libs.first.end_with?("/some-lib/lib")
   end
 
@@ -107,6 +109,47 @@ class DevServerFileGuardTest < Minitest::Test
     File.write(File.join(sibling, "x.txt"), "x")
 
     status, = @server.send(:route_file, "/../#{File.basename(sibling)}/x.txt")
+
+    assert_equal 404, status
+  end
+end
+
+# fresh clone 里没有编译产物（*.js 不入库）：.js 请求必须在存在性守卫之前
+# 先查同目录同名 .rb，否则 counter.html 引用的 counter.js 直接 404，
+# 整个示例都跑不起来（作者本机留有旧产物所以一直没暴露）
+class DevServerFreshCloneCompileTest < Minitest::Test
+  def setup
+    @base = Dir.mktmpdir
+    @dir = File.join(@base, "app")
+    Dir.mkdir(@dir)
+    File.write(File.join(@dir, "counter.rb"), "puts 1")
+    @server = Citrine::DevServer.new(@dir, 4402)
+  end
+
+  def teardown
+    FileUtils.remove_entry(@base) if @base && File.directory?(@base)
+  end
+
+  def test_js_request_compiles_from_sibling_rb_when_js_artifact_absent
+    @server.define_singleton_method(:serve_compiled) { |path, rb| [200, {}, ["compiled #{rb}"]] }
+
+    status, _headers, body = @server.send(:route_file, "/counter.js")
+
+    assert_equal 200, status
+    assert_match(/counter\.rb\z/, body.join)
+  end
+
+  def test_js_request_without_sibling_rb_still_404s
+    status, = @server.send(:route_file, "/missing.js")
+
+    assert_equal 404, status
+  end
+
+  def test_js_request_escaping_dir_is_rejected
+    # 目录逃逸守卫（A4）对 .js 路径同样生效：../evil.rb 在目录外，不许现场编译
+    File.write(File.join(@base, "evil.rb"), "puts 1")
+
+    status, = @server.send(:route_file, "/../evil.js")
 
     assert_equal 404, status
   end
