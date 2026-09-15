@@ -10,6 +10,15 @@
 #
 # 实现方式：以 prepend 模块包住 Signal/Effect 的 initialize/run——
 # 内核方法保持原样，不因埋点改变行为。
+#
+# 时序探针（M1，DESIGN-devtools P1–P4）拆在 debug/ 子目录：
+# 每个探针一个文件，全部显式 require 才加载，生产构建不含。
+require_relative "debug/ring"
+require_relative "debug/write_log"
+require_relative "debug/flush_trace"
+require_relative "debug/event_stream"
+require_relative "debug/tree"
+
 module Citrine
   # DevTools 埋点（仅 citrine/debug 加载时生效）
   module Debug
