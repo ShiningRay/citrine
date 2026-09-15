@@ -7,11 +7,16 @@ require_relative "style"
 module Citrine
   # 可调用体（Symbol / Proc）分发的统一入口：Symbol 在 receiver 上按 arity
   # 决定是否接收实参；Proc 默认保持闭包 self（事件回调的语义——嵌套组件的
-  # 父级回调不能被重绑），bind: true 时重绑到 receiver（生命周期钩子 /
+  # 父级回调不能被重绑），bind 为 true 时重绑到 receiver（生命周期钩子 /
   # error_fallback 需要在 owner 上下文里调 DSL）。
   # 事件处理器（Component#handle_event）与错误兜底（Renderer#render_error_fallback）
   # 同此一份 arity 约定，不再各处手写分支。
-  def self.dispatch_callable(handler, receiver, arg = nil, bind: false)
+  #
+  # ⚠️ bind 必须是位置参数而非关键字参数：Opal 对带 kwargs 的方法会无条件
+  # extract_kwargs——把最后一个响应 to_hash 的位置实参（事件 payload Hash，
+  # 如拖拽 {x,y,w,h}、相机 {x,y,delta_y}）抽走当 kwargs，arg 变 nil、浏览器端
+  # NoMethodError（CRuby 下花括号 Hash 永远绑位置参数，单测不可见）。
+  def self.dispatch_callable(handler, receiver, arg = nil, bind = false)
     case handler
     when Symbol
       receiver.method(handler).arity.zero? ? receiver.send(handler) : receiver.send(handler, arg)
@@ -509,9 +514,9 @@ module Citrine
     end
 
     # 异常对象交给兜底分支（经 Citrine.dispatch_callable，与事件处理器同口径；
-    # Proc 需要 owner 上下文里的 DSL，故 bind: true 重绑 self）
+    # Proc 需要 owner 上下文里的 DSL，故 bind 传 true 重绑 self）
     def render_error_fallback(owner, fallback, error)
-      Citrine.dispatch_callable(fallback, owner, error, bind: true)
+      Citrine.dispatch_callable(fallback, owner, error, true)
     end
 
     # keyed 复用的匹配池：一次块执行内，按 key + 身份标签取用旧节点。

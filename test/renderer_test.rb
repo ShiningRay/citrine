@@ -380,9 +380,21 @@ class RendererTest < Minitest::Test
     ctx = Object.new
     def ctx.num = 10
 
-    assert_equal 10, Citrine.dispatch_callable(proc { num }, ctx, bind: true)
+    assert_equal 10, Citrine.dispatch_callable(proc { num }, ctx, nil, true)
     assert_equal 5, Citrine.dispatch_callable(->(x) { x + 1 }, ctx, 4)
     assert_raises(NameError) { Citrine.dispatch_callable(proc { num }, ctx) }
+  end
+
+  # 事件 payload 是位置参数 Hash（拖拽 {x,y,w,h}、相机 {x,y,delta_y}）：
+  # 必须原样抵达处理器。bind 一旦改回关键字参数，Opal 的 extract_kwargs 会
+  # 把该 Hash 抽成 kwargs、arg 变 nil（浏览器 NoMethodError，CRuby 单测不可见）
+  def test_dispatch_callable_hash_payload_arrives_as_positional_arg
+    receiver = Object.new
+    def receiver.take(e) = e
+
+    payload = { x: 12, y: 34 }
+    assert_same payload, Citrine.dispatch_callable(:take, receiver, payload)
+    assert_equal payload, Citrine.dispatch_callable(->(e) { e }, receiver, payload)
   end
 
   def test_dispatch_callable_rejects_unknown_handler
