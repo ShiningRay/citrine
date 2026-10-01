@@ -18,7 +18,7 @@
 git clone https://github.com/ShiningRay/citrine.git
 cd citrine
 bundle install   # Ruby ≥ 3.0；本地开发建议 rbenv 装 3.3.x
-npm ci           # 可选：仅 rake size 体积守卫需要 esbuild
+pnpm install      # 可选：仅 rake size 体积守卫需要 esbuild
 ```
 
 ## 测试与验收命令

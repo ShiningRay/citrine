@@ -62,8 +62,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
       - name: 安装 esbuild（体积守卫依赖）
-        run: npm ci
+        run: pnpm install --frozen-lockfile
       - name: 产物体积守卫（gzip ≤ 300KB）
         run: bundle exec rake size
       - name: source map 指回 .rb

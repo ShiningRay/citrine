@@ -25,8 +25,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "22"
-      - name: 安装 JS 工具链（T1：esbuild 是 rake size 的 dev 依赖，随 package-lock 钉版）
-        run: npm ci
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+      - name: 安装 JS 工具链（T1：esbuild 是 rake size 的 dev 依赖，随 pnpm-lock 钉版）
+        run: pnpm install --frozen-lockfile
       - name: 发布门禁（T2：与 CI 对齐——单测 + 桩验收 + lint + 体积守卫）
         run: |
           bundle exec rake
