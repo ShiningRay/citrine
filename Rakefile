@@ -38,10 +38,10 @@ desc "产物体积守卫（T-A1）：无 map 编译 + esbuild 压缩，gzip 后 
 task :size do
   Dir.chdir("examples") do
     sh "opal -c --no-source-map -I../lib -I. -o counter.js counter.rb"
-    if system("npx --no-install esbuild --version > /dev/null 2>&1")
-      sh "npx --no-install esbuild counter.js --minify --target=es2015 --allow-overwrite --outfile=counter.min.js"
+    if system("pnpm exec esbuild --version > /dev/null 2>&1")
+      sh "pnpm exec esbuild counter.js --minify --target=es2015 --allow-overwrite --outfile=counter.min.js"
     else
-      notice = "esbuild 不可用：体积守卫降级为仅校验未压缩产物（仓库根 npm ci 安装 dev 依赖后恢复完整守卫）"
+      notice = "esbuild 不可用：体积守卫降级为仅校验未压缩产物（仓库根 pnpm install 安装 dev 依赖后恢复完整守卫）"
       warn "  (#{notice})"
       puts "::notice::#{notice}" if ENV["CI"] # GitHub Actions 注记：降级必须可见，不能静默溜过发布门禁（T1）
     end
