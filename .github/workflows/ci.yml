@@ -64,7 +64,7 @@ jobs:
           node-version: "22"
       # 版本由 package.json 的 packageManager 字段提供，此处不可再传 version
       # （同时指定会报 Multiple versions of pnpm specified）
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
       - name: 安装 esbuild（体积守卫依赖）
         run: pnpm install --frozen-lockfile
       - name: 产物体积守卫（gzip ≤ 300KB）
